@@ -1,0 +1,69 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: payment-mysql
+    restart: unless-stopped
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: Asia/Taipei
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - payment-net
+
+  payment-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: payment-api
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      TZ: Asia/Taipei
+      APP_ENV: ${APP_ENV}
+      APP_PORT: ${APP_PORT}
+      DATABASE_DSN: ${DATABASE_DSN}
+      NEWEBPAY_MPG_URL: ${NEWEBPAY_MPG_URL}
+      NEWEBPAY_MERCHANT_ID: ${NEWEBPAY_MERCHANT_ID}
+      NEWEBPAY_HASH_KEY: ${NEWEBPAY_HASH_KEY}
+      NEWEBPAY_HASH_IV: ${NEWEBPAY_HASH_IV}
+      NEWEBPAY_NOTIFY_URL: ${NEWEBPAY_NOTIFY_URL}
+      NEWEBPAY_RETURN_URL: ${NEWEBPAY_RETURN_URL}
+      RY_BASE_URL: ${RY_BASE_URL}
+      RY_CUSTOMER_ID: ${RY_CUSTOMER_ID}
+      RY_SIGN_KEY: ${RY_SIGN_KEY}
+      RY_PAYOUT_NOTIFY_URL: ${RY_PAYOUT_NOTIFY_URL}
+      RY_MAX_SKEW_SECONDS: ${RY_MAX_SKEW_SECONDS}
+      RY_HTTP_TIMEOUT_SECONDS: ${RY_HTTP_TIMEOUT_SECONDS}
+      MERCHANT_CODE: ${MERCHANT_CODE}
+      MERCHANT_NAME: ${MERCHANT_NAME}
+      MERCHANT_API_KEY: ${MERCHANT_API_KEY}
+      MERCHANT_CALLBACK_URL: ${MERCHANT_CALLBACK_URL}
+      MERCHANT_INITIAL_BALANCE_TWD: ${MERCHANT_INITIAL_BALANCE_TWD}
+      PAYOUT_REVIEW_TOKEN: ${PAYOUT_REVIEW_TOKEN}
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - payment-net
+
+networks:
+  payment-net:
+    driver: bridge
+
+volumes:
+  mysql-data:
