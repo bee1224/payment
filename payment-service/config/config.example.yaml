@@ -1,0 +1,30 @@
+app:
+  name: payment-service
+  env: local
+  port: 8080
+
+database:
+  dsn: "user:password@tcp(127.0.0.1:3306)/payment_service?parseTime=true"
+
+newebpay:
+  mpg_url: "https://core.newebpay.com/MPG/mpg_gateway"
+  merchant_id: "MS123456789"
+  hash_key: "your_hash_key"
+  hash_iv: "your_hash_iv"
+  notify_url: "https://example.com/api/notify/newebpay"
+  return_url: "https://example.com/payment/result"
+
+ry:
+  base_url: "https://provider.example.com"
+  customer_id: "50000"
+  sign_key: "your_ry_sign_key"
+  max_skew_seconds: 300
+  payout_notify_url: "https://example.com/api/payments/callback"
+  http_timeout_seconds: 15
+
+merchant:
+  code: "RY100001"
+  name: "RY Primary Merchant"
+  api_key: "RYsk_7Nq4xP9mL2vT8cH5uK3dS6wZ1bF4"
+  callback_url: ""
+  initial_balance_twd: 100000

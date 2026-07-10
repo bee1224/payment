@@ -1,0 +1,707 @@
+{
+  "info": {
+    "_postman_id": "6f2c7285-f2b4-4a38-9e11-payment-service-collection",
+    "name": "Payment Service API Collection",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Postman collection for current payment-service routes: deposits, RY payout proxy, and workflow payouts."
+  },
+  "variable": [
+    { "key": "base_url", "value": "https://payment-service.0f2006wzt5v7m.ap-east-1.cs.amazonlightsail.com", "type": "string" },
+    { "key": "ry_sign_key", "value": "your_ry_sign_key", "type": "string" },
+    { "key": "pay_customer_id", "value": "M10001", "type": "string" },
+    { "key": "pay_notify_url", "value": "https://merchant.example.com/callback", "type": "string" },
+    { "key": "pay_channel_id", "value": "1000", "type": "string" },
+    { "key": "pay_amount", "value": "1000", "type": "string" },
+    { "key": "pay_product_name", "value": "RY Deposit Test", "type": "string" },
+    { "key": "bank_account_json", "value": "[\"7000000000123456789\"]", "type": "string" },
+    { "key": "store_number_json", "value": "[]", "type": "string" },
+    { "key": "user_name", "value": "Postman Test User", "type": "string" },
+    { "key": "bank_id", "value": "013", "type": "string" },
+    { "key": "pay_currency", "value": "TWD", "type": "string" },
+    { "key": "mobile", "value": "0900123456", "type": "string" },
+    { "key": "id_no", "value": "A123456789", "type": "string" },
+    { "key": "pay_apply_date", "value": "", "type": "string" },
+    { "key": "pay_order_id", "value": "", "type": "string" },
+    { "key": "pay_md5_sign", "value": "", "type": "string" },
+    { "key": "query_apply_date", "value": "", "type": "string" },
+    { "key": "query_md5_sign", "value": "", "type": "string" },
+    { "key": "transaction_id", "value": "", "type": "string" },
+    { "key": "merchant_id", "value": "M10001", "type": "string" },
+    { "key": "merchant_api_key", "value": "merchant-secret", "type": "string" },
+    { "key": "merchant_callback_url", "value": "https://merchant.example.com/payout-callback", "type": "string" },
+    { "key": "merchant_payout_no", "value": "", "type": "string" },
+    { "key": "payout_no", "value": "", "type": "string" },
+    { "key": "payout_amount", "value": "100.00", "type": "string" },
+    { "key": "payout_currency", "value": "TWD", "type": "string" },
+    { "key": "pay_account_name", "value": "Postman Tester", "type": "string" },
+    { "key": "pay_card_no", "value": "8123456789012345", "type": "string" },
+    { "key": "pay_bank_name", "value": "013", "type": "string" },
+    { "key": "pay_sub_branch", "value": "", "type": "string" },
+    { "key": "pay_sub_branch_code", "value": "", "type": "string" },
+    { "key": "pay_city", "value": "", "type": "string" },
+    { "key": "pay_validate_id", "value": "", "type": "string" },
+    { "key": "payout_pay_currency", "value": "TWD", "type": "string" },
+    { "key": "payout_review_token", "value": "review-secret", "type": "string" },
+    { "key": "ry_payout_apply_date", "value": "", "type": "string" },
+    { "key": "ry_payout_order_id", "value": "", "type": "string" },
+    { "key": "ry_payout_md5_sign", "value": "", "type": "string" },
+    { "key": "ry_payout_query_apply_date", "value": "", "type": "string" },
+    { "key": "ry_payout_query_md5_sign", "value": "", "type": "string" },
+    { "key": "ry_payout_balance_apply_date", "value": "", "type": "string" },
+    { "key": "ry_payout_balance_md5_sign", "value": "", "type": "string" },
+    { "key": "callback_datetime", "value": "2026-07-09 12:00:00", "type": "string" },
+    { "key": "callback_transaction_code", "value": "30000", "type": "string" },
+    { "key": "callback_transaction_msg", "value": "success", "type": "string" },
+    { "key": "callback_amount", "value": "100.0000", "type": "string" },
+    { "key": "callback_sign", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/health",
+          "host": ["{{base_url}}"],
+          "path": ["health"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status code is 200', function () {",
+              "  pm.response.to.have.status(200);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "收款 RY Contract",
+      "item": [
+        {
+          "name": "收款-建立訂單 /api/pay_order",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function normalize(value) {",
+                  "  if (value === null || value === undefined) return '';",
+                  "  if (Array.isArray(value)) return JSON.stringify(value);",
+                  "  return String(value).trim();",
+                  "}",
+                  "function isEmpty(value) {",
+                  "  return value === null || value === undefined || value === '' || (Array.isArray(value) && value.length === 0);",
+                  "}",
+                  "function sign(fields, signKey) {",
+                  "  const keys = Object.keys(fields).filter((key) => !isEmpty(fields[key])).sort();",
+                  "  const parts = keys.map((key) => key + '=' + normalize(fields[key]));",
+                  "  parts.push('key=' + signKey);",
+                  "  return CryptoJS.MD5(parts.join('&')).toString().toUpperCase();",
+                  "}",
+                  "const now = Math.floor(Date.now() / 1000).toString();",
+                  "const orderId = 'DEP' + new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);",
+                  "const bankAccounts = JSON.parse(pm.collectionVariables.get('bank_account_json') || '[]');",
+                  "const storeNumbers = JSON.parse(pm.collectionVariables.get('store_number_json') || '[]');",
+                  "pm.collectionVariables.set('pay_apply_date', now);",
+                  "pm.collectionVariables.set('pay_order_id', orderId);",
+                  "const fields = {",
+                  "  pay_customer_id: pm.collectionVariables.get('pay_customer_id'),",
+                  "  pay_apply_date: now,",
+                  "  pay_order_id: orderId,",
+                  "  pay_notify_url: pm.collectionVariables.get('pay_notify_url'),",
+                  "  pay_amount: pm.collectionVariables.get('pay_amount'),",
+                  "  pay_channel_id: pm.collectionVariables.get('pay_channel_id'),",
+                  "  bank_account: bankAccounts,",
+                  "  store_number: storeNumbers,",
+                  "  pay_product_name: pm.collectionVariables.get('pay_product_name'),",
+                  "  user_name: pm.collectionVariables.get('user_name'),",
+                  "  bank_id: pm.collectionVariables.get('bank_id'),",
+                  "  pay_currency: pm.collectionVariables.get('pay_currency'),",
+                  "  mobile: pm.collectionVariables.get('mobile'),",
+                  "  id_no: pm.collectionVariables.get('id_no')",
+                  "};",
+                  "pm.collectionVariables.set('pay_md5_sign', sign(fields, pm.collectionVariables.get('ry_sign_key')));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status code is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.test('code is 0', function () {",
+                  "  pm.expect(json.code).to.eql(0);",
+                  "});",
+                  "if (json.data && json.data.order_id) pm.collectionVariables.set('pay_order_id', json.data.order_id);",
+                  "if (json.data && json.data.transaction_id) pm.collectionVariables.set('transaction_id', json.data.transaction_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pay_customer_id\": \"{{pay_customer_id}}\",\n  \"pay_apply_date\": \"{{pay_apply_date}}\",\n  \"pay_order_id\": \"{{pay_order_id}}\",\n  \"pay_notify_url\": \"{{pay_notify_url}}\",\n  \"pay_amount\": \"{{pay_amount}}\",\n  \"pay_channel_id\": \"{{pay_channel_id}}\",\n  \"bank_account\": {{bank_account_json}},\n  \"store_number\": {{store_number_json}},\n  \"pay_product_name\": \"{{pay_product_name}}\",\n  \"user_name\": \"{{user_name}}\",\n  \"bank_id\": \"{{bank_id}}\",\n  \"pay_currency\": \"{{pay_currency}}\",\n  \"mobile\": \"{{mobile}}\",\n  \"id_no\": \"{{id_no}}\",\n  \"pay_md5_sign\": \"{{pay_md5_sign}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/pay_order",
+              "host": ["{{base_url}}"],
+              "path": ["api", "pay_order"]
+            },
+            "description": "Canonical deposit create route."
+          }
+        },
+        {
+          "name": "收款-查詢訂單 /api/query_transaction",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function normalize(value) {",
+                  "  if (Array.isArray(value)) return JSON.stringify(value);",
+                  "  return String(value).trim();",
+                  "}",
+                  "function sign(fields, signKey) {",
+                  "  const keys = Object.keys(fields).sort();",
+                  "  const parts = keys.map((key) => key + '=' + normalize(fields[key]));",
+                  "  parts.push('key=' + signKey);",
+                  "  return CryptoJS.MD5(parts.join('&')).toString().toUpperCase();",
+                  "}",
+                  "const now = Math.floor(Date.now() / 1000).toString();",
+                  "const orderIds = [pm.collectionVariables.get('pay_order_id')];",
+                  "pm.collectionVariables.set('query_apply_date', now);",
+                  "pm.collectionVariables.set('query_md5_sign', sign({",
+                  "  pay_customer_id: pm.collectionVariables.get('pay_customer_id'),",
+                  "  pay_apply_date: now,",
+                  "  pay_order_id: orderIds",
+                  "}, pm.collectionVariables.get('ry_sign_key')));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status code is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.test('code is 0', function () {",
+                  "  pm.expect(json.code).to.eql(0);",
+                  "});",
+                  "pm.test('data is array', function () {",
+                  "  pm.expect(Array.isArray(json.data)).to.eql(true);",
+                  "});",
+                  "if (json.data && json.data.length > 0 && json.data[0].transaction_id) {",
+                  "  pm.collectionVariables.set('transaction_id', json.data[0].transaction_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pay_customer_id\": \"{{pay_customer_id}}\",\n  \"pay_apply_date\": \"{{query_apply_date}}\",\n  \"pay_order_id\": [\n    \"{{pay_order_id}}\"\n  ],\n  \"pay_md5_sign\": \"{{query_md5_sign}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/query_transaction",
+              "host": ["{{base_url}}"],
+              "path": ["api", "query_transaction"]
+            },
+            "description": "Canonical deposit query route."
+          }
+        }
+      ]
+    },
+    {
+      "name": "RY 代付代理 /api/payments/*",
+      "item": [
+        {
+          "name": "代付代理-建立訂單 /api/payments/pay_order",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function normalize(value) {",
+                  "  if (Array.isArray(value)) return JSON.stringify(value);",
+                  "  return String(value).trim();",
+                  "}",
+                  "function isEmpty(value) {",
+                  "  return value === null || value === undefined || value === '' || (Array.isArray(value) && value.length === 0);",
+                  "}",
+                  "function sign(fields, signKey) {",
+                  "  const keys = Object.keys(fields).filter((key) => !isEmpty(fields[key])).sort();",
+                  "  const parts = keys.map((key) => key + '=' + normalize(fields[key]));",
+                  "  parts.push('key=' + signKey);",
+                  "  return CryptoJS.MD5(parts.join('&')).toString().toUpperCase();",
+                  "}",
+                  "const now = Math.floor(Date.now() / 1000).toString();",
+                  "const orderId = 'PAYOUTPROXY' + new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);",
+                  "pm.collectionVariables.set('ry_payout_apply_date', now);",
+                  "pm.collectionVariables.set('ry_payout_order_id', orderId);",
+                  "pm.collectionVariables.set('ry_payout_md5_sign', sign({",
+                  "  pay_customer_id: pm.collectionVariables.get('pay_customer_id'),",
+                  "  pay_apply_date: now,",
+                  "  pay_order_id: orderId,",
+                  "  pay_notify_url: pm.collectionVariables.get('pay_notify_url'),",
+                  "  pay_amount: pm.collectionVariables.get('payout_amount'),",
+                  "  pay_account_name: pm.collectionVariables.get('pay_account_name'),",
+                  "  pay_card_no: pm.collectionVariables.get('pay_card_no'),",
+                  "  pay_bank_name: pm.collectionVariables.get('pay_bank_name'),",
+                  "  pay_sub_branch: pm.collectionVariables.get('pay_sub_branch'),",
+                  "  pay_sub_branch_code: pm.collectionVariables.get('pay_sub_branch_code'),",
+                  "  pay_city: pm.collectionVariables.get('pay_city'),",
+                  "  pay_validate_id: pm.collectionVariables.get('pay_validate_id'),",
+                  "  pay_currency: pm.collectionVariables.get('payout_pay_currency')",
+                  "}, pm.collectionVariables.get('ry_sign_key')));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status code is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.test('response has code', function () {",
+                  "  pm.expect(json).to.have.property('code');",
+                  "});",
+                  "if (json.data && json.data.order_id) pm.collectionVariables.set('ry_payout_order_id', json.data.order_id);",
+                  "if (json.data && json.data.transaction_id) pm.collectionVariables.set('transaction_id', json.data.transaction_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pay_customer_id\": \"{{pay_customer_id}}\",\n  \"pay_apply_date\": \"{{ry_payout_apply_date}}\",\n  \"pay_order_id\": \"{{ry_payout_order_id}}\",\n  \"pay_notify_url\": \"{{pay_notify_url}}\",\n  \"pay_amount\": \"{{payout_amount}}\",\n  \"pay_account_name\": \"{{pay_account_name}}\",\n  \"pay_card_no\": \"{{pay_card_no}}\",\n  \"pay_bank_name\": \"{{pay_bank_name}}\",\n  \"pay_sub_branch\": \"{{pay_sub_branch}}\",\n  \"pay_sub_branch_code\": \"{{pay_sub_branch_code}}\",\n  \"pay_city\": \"{{pay_city}}\",\n  \"pay_validate_id\": \"{{pay_validate_id}}\",\n  \"pay_currency\": \"{{payout_pay_currency}}\",\n  \"pay_md5_sign\": \"{{ry_payout_md5_sign}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/payments/pay_order",
+              "host": ["{{base_url}}"],
+              "path": ["api", "payments", "pay_order"]
+            }
+          }
+        },
+        {
+          "name": "代付代理-查詢訂單 /api/payments/query_transaction",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function sign(fields, signKey) {",
+                  "  const keys = Object.keys(fields).sort();",
+                  "  const parts = keys.map((key) => key + '=' + (Array.isArray(fields[key]) ? JSON.stringify(fields[key]) : String(fields[key]).trim()));",
+                  "  parts.push('key=' + signKey);",
+                  "  return CryptoJS.MD5(parts.join('&')).toString().toUpperCase();",
+                  "}",
+                  "const now = Math.floor(Date.now() / 1000).toString();",
+                  "const orderIds = [pm.collectionVariables.get('ry_payout_order_id') || pm.collectionVariables.get('merchant_payout_no')];",
+                  "pm.collectionVariables.set('ry_payout_query_apply_date', now);",
+                  "pm.collectionVariables.set('ry_payout_query_md5_sign', sign({",
+                  "  pay_customer_id: pm.collectionVariables.get('pay_customer_id'),",
+                  "  pay_apply_date: now,",
+                  "  pay_order_id: orderIds",
+                  "}, pm.collectionVariables.get('ry_sign_key')));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status code is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.test('response has code', function () {",
+                  "  pm.expect(json).to.have.property('code');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pay_customer_id\": \"{{pay_customer_id}}\",\n  \"pay_apply_date\": \"{{ry_payout_query_apply_date}}\",\n  \"pay_order_id\": [\n    \"{{ry_payout_order_id}}\"\n  ],\n  \"pay_md5_sign\": \"{{ry_payout_query_md5_sign}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/payments/query_transaction",
+              "host": ["{{base_url}}"],
+              "path": ["api", "payments", "query_transaction"]
+            }
+          }
+        },
+        {
+          "name": "代付代理-餘額查詢 /api/payments/balance",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function sign(fields, signKey) {",
+                  "  const keys = Object.keys(fields).sort();",
+                  "  const parts = keys.map((key) => key + '=' + String(fields[key]).trim());",
+                  "  parts.push('key=' + signKey);",
+                  "  return CryptoJS.MD5(parts.join('&')).toString().toUpperCase();",
+                  "}",
+                  "const now = Math.floor(Date.now() / 1000).toString();",
+                  "pm.collectionVariables.set('ry_payout_balance_apply_date', now);",
+                  "pm.collectionVariables.set('ry_payout_balance_md5_sign', sign({",
+                  "  pay_customer_id: pm.collectionVariables.get('pay_customer_id'),",
+                  "  pay_apply_date: now",
+                  "}, pm.collectionVariables.get('ry_sign_key')));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status code is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pay_customer_id\": \"{{pay_customer_id}}\",\n  \"pay_apply_date\": \"{{ry_payout_balance_apply_date}}\",\n  \"pay_md5_sign\": \"{{ry_payout_balance_md5_sign}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/payments/balance",
+              "host": ["{{base_url}}"],
+              "path": ["api", "payments", "balance"]
+            }
+          }
+        },
+        {
+          "name": "代付代理-回調模擬 /api/payments/callback",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function sign(fields, signKey) {",
+                  "  const keys = Object.keys(fields).filter((key) => fields[key] !== '').sort();",
+                  "  const parts = keys.map((key) => key + '=' + String(fields[key]));",
+                  "  parts.push('key=' + signKey);",
+                  "  return CryptoJS.MD5(parts.join('&')).toString().toUpperCase();",
+                  "}",
+                  "const fields = {",
+                  "  customer_id: pm.collectionVariables.get('pay_customer_id'),",
+                  "  order_id: pm.collectionVariables.get('merchant_payout_no') || pm.collectionVariables.get('ry_payout_order_id'),",
+                  "  amount: pm.collectionVariables.get('callback_amount'),",
+                  "  datetime: pm.collectionVariables.get('callback_datetime'),",
+                  "  transaction_id: pm.collectionVariables.get('transaction_id') || 'PAYOUTCALLBACK001',",
+                  "  transaction_code: pm.collectionVariables.get('callback_transaction_code'),",
+                  "  transaction_msg: pm.collectionVariables.get('callback_transaction_msg')",
+                  "};",
+                  "pm.collectionVariables.set('callback_sign', sign(fields, pm.collectionVariables.get('ry_sign_key')));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status code is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('body is OK', function () {",
+                  "  pm.expect(pm.response.text()).to.eql('OK');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customer_id\": \"{{pay_customer_id}}\",\n  \"order_id\": \"{{merchant_payout_no}}\",\n  \"amount\": \"{{callback_amount}}\",\n  \"datetime\": \"{{callback_datetime}}\",\n  \"sign\": \"{{callback_sign}}\",\n  \"transaction_id\": \"{{transaction_id}}\",\n  \"transaction_code\": \"{{callback_transaction_code}}\",\n  \"transaction_msg\": \"{{callback_transaction_msg}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/payments/callback",
+              "host": ["{{base_url}}"],
+              "path": ["api", "payments", "callback"]
+            },
+            "description": "Simulate RY payout callback. order_id must match an existing merchant_payout_no."
+          }
+        }
+      ]
+    },
+    {
+      "name": "正式提款流程 /api/payouts/*",
+      "item": [
+        {
+          "name": "提款-建立申請 /api/payouts",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const payoutNo = 'WD' + new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);",
+                  "pm.collectionVariables.set('merchant_payout_no', payoutNo);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status code is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.test('code is 0', function () {",
+                  "  pm.expect(json.code).to.eql(0);",
+                  "});",
+                  "if (json.data && json.data.payout_no) pm.collectionVariables.set('payout_no', json.data.payout_no);",
+                  "if (json.data && json.data.merchant_payout_no) pm.collectionVariables.set('merchant_payout_no', json.data.merchant_payout_no);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchant_id\": \"{{merchant_id}}\",\n  \"api_key\": \"{{merchant_api_key}}\",\n  \"merchant_payout_no\": \"{{merchant_payout_no}}\",\n  \"amount\": \"{{payout_amount}}\",\n  \"currency\": \"{{payout_currency}}\",\n  \"callback_url\": \"{{merchant_callback_url}}\",\n  \"pay_account_name\": \"{{pay_account_name}}\",\n  \"pay_card_no\": \"{{pay_card_no}}\",\n  \"pay_bank_name\": \"{{pay_bank_name}}\",\n  \"pay_sub_branch\": \"{{pay_sub_branch}}\",\n  \"pay_sub_branch_code\": \"{{pay_sub_branch_code}}\",\n  \"pay_city\": \"{{pay_city}}\",\n  \"pay_validate_id\": \"{{pay_validate_id}}\",\n  \"pay_currency\": \"{{payout_pay_currency}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/payouts",
+              "host": ["{{base_url}}"],
+              "path": ["api", "payouts"]
+            }
+          }
+        },
+        {
+          "name": "提款-POST查詢 /api/payouts/query",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status code is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.test('code is 0', function () {",
+                  "  pm.expect(json.code).to.eql(0);",
+                  "});",
+                  "if (json.data && json.data.payout_no) pm.collectionVariables.set('payout_no', json.data.payout_no);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchant_id\": \"{{merchant_id}}\",\n  \"api_key\": \"{{merchant_api_key}}\",\n  \"merchant_payout_no\": \"{{merchant_payout_no}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/payouts/query",
+              "host": ["{{base_url}}"],
+              "path": ["api", "payouts", "query"]
+            }
+          }
+        },
+        {
+          "name": "提款-GET查詢 /api/payouts/{payout_no}",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status code is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.test('code is 0', function () {",
+                  "  pm.expect(json.code).to.eql(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/payouts/{{payout_no}}?merchant_id={{merchant_id}}&api_key={{merchant_api_key}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "payouts", "{{payout_no}}"],
+              "query": [
+                { "key": "merchant_id", "value": "{{merchant_id}}" },
+                { "key": "api_key", "value": "{{merchant_api_key}}" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "提款-審核通過 /api/payouts/{payout_no}/approve",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status code is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.test('code is 0', function () {",
+                  "  pm.expect(json.code).to.eql(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Payout-Review-Token", "value": "{{payout_review_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/payouts/{{payout_no}}/approve",
+              "host": ["{{base_url}}"],
+              "path": ["api", "payouts", "{{payout_no}}", "approve"]
+            },
+            "description": "Approve workflow payout and attempt RY submission."
+          }
+        },
+        {
+          "name": "提款-審核拒絕 /api/payouts/{payout_no}/reject",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status code is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Payout-Review-Token", "value": "{{payout_review_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"manual reject from postman\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/payouts/{{payout_no}}/reject",
+              "host": ["{{base_url}}"],
+              "path": ["api", "payouts", "{{payout_no}}", "reject"]
+            }
+          }
+        },
+        {
+          "name": "提款-取消 /api/payouts/{payout_no}/cancel",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status code is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Payout-Review-Token", "value": "{{payout_review_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"manual cancel from postman\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/payouts/{{payout_no}}/cancel",
+              "host": ["{{base_url}}"],
+              "path": ["api", "payouts", "{{payout_no}}", "cancel"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

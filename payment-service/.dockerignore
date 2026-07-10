@@ -1,0 +1,8 @@
+.git
+.env
+config/config.yaml
+.gocache
+.gopath
+.deploy-tmp
+api.exe
+bin
