@@ -51,24 +51,34 @@ func SeedMerchantInDB(ctx context.Context, db *sql.DB, bootstrap MerchantBootstr
 	defer rollback(tx)
 
 	merchant := bootstrap.Merchant()
+	apiKeyHash := hashMerchantAPIKey(merchant.APIKey)
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO merchants (code, name, api_key_hash, status, callback_url)
 		VALUES (?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
 			name = VALUES(name),
-			api_key_hash = VALUES(api_key_hash),
-			status = VALUES(status),
+			api_key_hash = CASE
+				WHEN api_key_hash IS NULL OR api_key_hash = '' THEN VALUES(api_key_hash)
+				ELSE api_key_hash
+			END,
+			status = CASE
+				WHEN status IS NULL OR status = '' THEN VALUES(status)
+				ELSE status
+			END,
 			callback_url = CASE
 				WHEN VALUES(callback_url) IS NULL OR VALUES(callback_url) = '' THEN callback_url
 				ELSE VALUES(callback_url)
 			END,
 			updated_at = CURRENT_TIMESTAMP
-	`, merchant.Code, merchant.Name, merchant.APIKey, merchant.Status, nullableString(merchant.CallbackURL)); err != nil {
+	`, merchant.Code, merchant.Name, apiKeyHash, merchant.Status, nullableString(merchant.CallbackURL)); err != nil {
 		return err
 	}
 
 	var merchantID int64
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM merchants WHERE code = ? LIMIT 1`, merchant.Code).Scan(&merchantID); err != nil {
+		return err
+	}
+	if err := syncMerchantAPIKeyTx(ctx, tx, merchantID, merchant.APIKey); err != nil {
 		return err
 	}
 

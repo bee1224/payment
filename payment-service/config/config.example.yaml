@@ -1,5 +1,5 @@
 app:
-  name: payment-service
+  name: RIG001 Gateway
   env: local
   port: 8080
 
@@ -11,20 +11,20 @@ newebpay:
   merchant_id: "MS123456789"
   hash_key: "your_hash_key"
   hash_iv: "your_hash_iv"
-  notify_url: "https://example.com/api/notify/newebpay"
-  return_url: "https://example.com/payment/result"
+  notify_url: "https://api.nnviopp.com/api/v1/deposits/providers/newebpay/notifications"
+  return_url: "https://api.nnviopp.com/api/v1/deposits/payment-result"
 
-ry:
-  base_url: "https://provider.example.com"
-  customer_id: "50000"
-  sign_key: "your_ry_sign_key"
+gateway:
+  base_url: "https://api.nnviopp.com"
+  customer_id: "RIG001"
+  sign_key: "23ebf933a239994547bcafbca6c7fb0ed8a2b041dded453885d8c40788347725"
   max_skew_seconds: 300
-  payout_notify_url: "https://example.com/api/payments/callback"
+  payout_notify_url: "https://api.nnviopp.com/api/payments/callback"
   http_timeout_seconds: 15
 
 merchant:
-  code: "RY100001"
-  name: "RY Primary Merchant"
-  api_key: "RYsk_7Nq4xP9mL2vT8cH5uK3dS6wZ1bF4"
+  code: "RIG001"
+  name: "NewebPay"
+  api_key: ""
   callback_url: ""
   initial_balance_twd: 100000

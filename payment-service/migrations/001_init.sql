@@ -12,6 +12,23 @@ CREATE TABLE IF NOT EXISTS merchants (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS merchant_api_keys (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  merchant_id BIGINT NOT NULL,
+  key_hash CHAR(64) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'active',
+  is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+  last_used_at TIMESTAMP NULL,
+  last_rotated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP NULL,
+  revoked_at TIMESTAMP NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_merchant_api_keys_hash (merchant_id, key_hash),
+  KEY idx_merchant_api_keys_active (merchant_id, status, expires_at, revoked_at),
+  CONSTRAINT fk_merchant_api_keys_merchant FOREIGN KEY (merchant_id) REFERENCES merchants(id)
+);
+
 CREATE TABLE IF NOT EXISTS payment_providers (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   code VARCHAR(64) NOT NULL UNIQUE,
@@ -140,7 +157,7 @@ CREATE TABLE IF NOT EXISTS payout_orders (
   merchant_id BIGINT NOT NULL,
   payout_no VARCHAR(64) NOT NULL UNIQUE,
   merchant_payout_no VARCHAR(64) NOT NULL,
-  provider_code VARCHAR(64) NOT NULL DEFAULT 'ry',
+  provider_code VARCHAR(64) NOT NULL DEFAULT 'gateway',
   provider_order_no VARCHAR(128) NULL,
   provider_trade_no VARCHAR(128) NULL,
   amount_cents BIGINT NOT NULL,

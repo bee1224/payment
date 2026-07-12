@@ -3,6 +3,8 @@ package http
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,12 +16,12 @@ import (
 	"payment-service/internal/config"
 	"payment-service/internal/domain"
 	"payment-service/internal/provider"
-	providerRY "payment-service/internal/provider/ry"
+	providerGateway "payment-service/internal/provider/gateway"
 	"payment-service/internal/repository"
 	"payment-service/internal/service"
 )
 
-const testRYSignKey = "test-ry-sign-key"
+const testGatewaySignKey = "test-gateway-sign-key"
 
 type fakeDepositGateway struct{}
 
@@ -57,10 +59,10 @@ func newTestDepositRouter() (http.Handler, *service.DepositService) {
 	}, 500000)
 	payoutService := service.NewPayoutService(
 		payoutStore,
-		providerRY.NewPayoutClient("", "", testRYSignKey, "https://merchant.example/api/payments/callback", time.Second),
+		providerGateway.NewPayoutClient("", "", testGatewaySignKey, "https://merchant.example/api/payments/callback", time.Second),
 	)
-	return NewRouter(depositService, payoutService, config.AppConfig{}, config.RYConfig{
-		SignKey:        testRYSignKey,
+	return NewRouter(depositService, payoutService, config.AppConfig{}, config.GatewayConfig{
+		SignKey:        testGatewaySignKey,
 		MaxSkewSeconds: 300,
 	}), depositService
 }
@@ -76,7 +78,7 @@ func signedDepositOrderBody(t *testing.T, merchantOrderNo string) []byte {
 		PayNotifyURL:   "https://merchant.example/callback",
 		PayProductName: "Deposit Test",
 	}
-	signature, err := buildRYMD5Signature(req.payOrderSignFields(), testRYSignKey)
+	signature, err := buildGatewayMD5Signature(req.payOrderSignFields(), testGatewaySignKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +97,7 @@ func signedDepositQueryBody(t *testing.T) []byte {
 		PayApplyDate:  strconv.FormatInt(time.Now().Unix(), 10),
 		PayOrderID:    []string{"MISSING"},
 	}
-	signature, err := buildRYMD5Signature(req.queryTransactionSignFields(), testRYSignKey)
+	signature, err := buildGatewayMD5Signature(req.queryTransactionSignFields(), testGatewaySignKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,10 +223,10 @@ func TestPayoutNamespaceIsNotHandledByDepositRouter(t *testing.T) {
 
 func TestRYPayoutRoutesUseProviderContract(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != providerRY.PayoutCreatePath {
+		if r.URL.Path != providerGateway.PayoutCreatePath {
 			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
 		}
-		var req providerRY.CreatePayoutRequest
+		var req providerGateway.CreatePayoutRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatal(err)
 		}
@@ -243,19 +245,19 @@ func TestRYPayoutRoutesUseProviderContract(t *testing.T) {
 	}, 500000)
 	payoutService := service.NewPayoutService(
 		payoutStore,
-		providerRY.NewPayoutClient(upstream.URL, "50000", testRYSignKey, "https://merchant.example/api/payments/callback", time.Second),
+		providerGateway.NewPayoutClient(upstream.URL, "50000", testGatewaySignKey, "https://merchant.example/api/payments/callback", time.Second),
 	)
 	body := []byte(`{
 		"pay_order_id":"PAYOUT-001",
 		"pay_amount":"100.00",
-		"pay_account_name":"周傑倫",
+		"pay_account_name":"Tester",
 		"pay_card_no":"202008372239",
 		"pay_bank_name":"013"
 	}`)
-	result := serveJSON(NewRouter(depositService, payoutService, config.AppConfig{}, config.RYConfig{
+	result := serveJSON(NewRouter(depositService, payoutService, config.AppConfig{}, config.GatewayConfig{
 		BaseURL:            upstream.URL,
 		CustomerID:         "50000",
-		SignKey:            testRYSignKey,
+		SignKey:            testGatewaySignKey,
 		PayoutNotifyURL:    "https://merchant.example/api/payments/callback",
 		HTTPTimeoutSeconds: 2,
 	}), http.MethodPost, "/api/payments/pay_order", body)
@@ -272,33 +274,33 @@ func TestRYPayoutCallbackRequiresValidSignature(t *testing.T) {
 	}, 500000)
 	payoutService := service.NewPayoutService(
 		payoutStore,
-		providerRY.NewPayoutClient("", "", testRYSignKey, "https://merchant.example/api/payments/callback", time.Second),
+		providerGateway.NewPayoutClient("", "", testGatewaySignKey, "https://merchant.example/api/payments/callback", time.Second),
 	)
-	router := NewRouter(depositService, payoutService, config.AppConfig{}, config.RYConfig{SignKey: testRYSignKey})
+	router := NewRouter(depositService, payoutService, config.AppConfig{}, config.GatewayConfig{SignKey: testGatewaySignKey})
 	if _, err := payoutService.CreatePayoutOrder(context.Background(), service.CreatePayoutOrderRequest{
 		MerchantID:       "M10001",
 		APIKey:           "merchant-secret",
 		MerchantPayoutNo: "PAYOUT-001",
 		Amount:           "100.00",
 		Currency:         "TWD",
-		PayAccountName:   "周傑倫",
+		PayAccountName:   "Tester",
 		PayCardNo:        "202008372239",
 		PayBankName:      "013",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	callback := providerRY.PayoutCallbackRequest{
+	callback := providerGateway.PayoutCallbackRequest{
 		CustomerID: 50000, OrderID: "PAYOUT-001", Amount: "100.0000",
 		DateTime: "2026-07-05 12:00:00", TransactionID: "P123",
-		TransactionCode: "30000", TransactionMsg: "支付成功",
+		TransactionCode: "30000", TransactionMsg: "paid",
 	}
-	callback.Sign, _ = providerRY.Sign(map[string]any{
+	callback.Sign, _ = providerGateway.Sign(map[string]any{
 		"customer_id": callback.CustomerID, "order_id": callback.OrderID,
 		"amount": callback.Amount, "datetime": callback.DateTime,
 		"transaction_id":   callback.TransactionID,
 		"transaction_code": callback.TransactionCode,
 		"transaction_msg":  callback.TransactionMsg,
-	}, testRYSignKey)
+	}, testGatewaySignKey)
 	body, _ := json.Marshal(callback)
 	result := serveJSON(router, http.MethodPost, "/api/payments/callback", body)
 	if result.Code != http.StatusOK || result.Body.String() != "OK" {
@@ -318,9 +320,9 @@ func TestWorkflowPayoutCreateAndQuery(t *testing.T) {
 	}, 500000)
 	payoutService := service.NewPayoutService(
 		payoutStore,
-		providerRY.NewPayoutClient("", "50000", testRYSignKey, "https://merchant.example/api/payments/callback", time.Second),
+		providerGateway.NewPayoutClient("", "50000", testGatewaySignKey, "https://merchant.example/api/payments/callback", time.Second),
 	)
-	router := NewRouter(depositService, payoutService, config.AppConfig{}, config.RYConfig{SignKey: testRYSignKey})
+	router := NewRouter(depositService, payoutService, config.AppConfig{}, config.GatewayConfig{SignKey: testGatewaySignKey})
 
 	createBody := []byte(`{
 		"merchant_id":"M10001",
@@ -329,7 +331,7 @@ func TestWorkflowPayoutCreateAndQuery(t *testing.T) {
 		"amount":"100.00",
 		"currency":"TWD",
 		"callback_url":"https://merchant.example/payout-callback",
-		"pay_account_name":"周傑倫",
+		"pay_account_name":"Tester",
 		"pay_card_no":"202008372239",
 		"pay_bank_name":"013"
 	}`)
@@ -349,6 +351,44 @@ func TestWorkflowPayoutCreateAndQuery(t *testing.T) {
 	}
 }
 
+func TestWorkflowPayoutCreateAcceptsHashedMerchantKey(t *testing.T) {
+	depositService := service.NewDepositService(
+		map[string]provider.DepositGateway{"fake": fakeDepositGateway{}},
+		map[string]string{"CREDIT": "fake"},
+		service.NewLedgerService(),
+	)
+	sum := sha256.Sum256([]byte("merchant-secret"))
+	payoutStore := repository.NewInMemoryPayoutStore()
+	payoutStore.SeedMerchant(domain.Merchant{
+		Code:   "M10001",
+		Name:   "Merchant 1",
+		APIKey: hex.EncodeToString(sum[:]),
+		Status: "active",
+	}, 500000)
+	payoutService := service.NewPayoutServiceWithSecrets(
+		payoutStore,
+		providerGateway.NewPayoutClient("", "50000", testGatewaySignKey, "https://merchant.example/api/payments/callback", time.Second),
+		map[string]string{"M10001": "merchant-secret"},
+	)
+	router := NewRouter(depositService, payoutService, config.AppConfig{}, config.GatewayConfig{SignKey: testGatewaySignKey})
+
+	createBody := []byte(`{
+		"merchant_id":"M10001",
+		"api_key":"merchant-secret",
+		"merchant_payout_no":"WD-HASH-001",
+		"amount":"100.00",
+		"currency":"TWD",
+		"callback_url":"https://merchant.example/payout-callback",
+		"pay_account_name":"Tester",
+		"pay_card_no":"202008372239",
+		"pay_bank_name":"013"
+	}`)
+	createResp := serveJSON(router, http.MethodPost, "/api/payouts", createBody)
+	if createResp.Code != http.StatusOK || !strings.Contains(createResp.Body.String(), `"status":"pending_review"`) {
+		t.Fatalf("create payout workflow with hashed merchant key failed: status=%d body=%s", createResp.Code, createResp.Body.String())
+	}
+}
+
 func TestWorkflowPayoutRejectsUnsupportedBankCode(t *testing.T) {
 	depositService := service.NewDepositService(
 		map[string]provider.DepositGateway{"fake": fakeDepositGateway{}},
@@ -361,9 +401,9 @@ func TestWorkflowPayoutRejectsUnsupportedBankCode(t *testing.T) {
 	}, 500000)
 	payoutService := service.NewPayoutService(
 		payoutStore,
-		providerRY.NewPayoutClient("", "50000", testRYSignKey, "https://merchant.example/api/payments/callback", time.Second),
+		providerGateway.NewPayoutClient("", "50000", testGatewaySignKey, "https://merchant.example/api/payments/callback", time.Second),
 	)
-	router := NewRouter(depositService, payoutService, config.AppConfig{}, config.RYConfig{SignKey: testRYSignKey})
+	router := NewRouter(depositService, payoutService, config.AppConfig{}, config.GatewayConfig{SignKey: testGatewaySignKey})
 
 	createBody := []byte(`{
 		"merchant_id":"M10001",
@@ -377,7 +417,7 @@ func TestWorkflowPayoutRejectsUnsupportedBankCode(t *testing.T) {
 		"pay_bank_name":"000"
 	}`)
 	createResp := serveJSON(router, http.MethodPost, "/api/payouts", createBody)
-	if createResp.Code != http.StatusBadRequest || !strings.Contains(createResp.Body.String(), "RY supported bank code whitelist") {
+	if createResp.Code != http.StatusBadRequest || !strings.Contains(createResp.Body.String(), "gateway supported bank code whitelist") {
 		t.Fatalf("expected whitelist validation error: status=%d body=%s", createResp.Code, createResp.Body.String())
 	}
 }
@@ -394,10 +434,10 @@ func TestWorkflowPayoutApproveRequiresReviewToken(t *testing.T) {
 	}, 500000)
 	payoutService := service.NewPayoutService(
 		payoutStore,
-		providerRY.NewPayoutClient("", "50000", testRYSignKey, "https://payment-service.example/api/payments/callback", time.Second),
+		providerGateway.NewPayoutClient("", "50000", testGatewaySignKey, "https://payment-service.example/api/payments/callback", time.Second),
 	)
-	router := NewRouter(depositService, payoutService, config.AppConfig{PayoutReviewToken: "review-secret"}, config.RYConfig{
-		SignKey:         testRYSignKey,
+	router := NewRouter(depositService, payoutService, config.AppConfig{PayoutReviewToken: "review-secret"}, config.GatewayConfig{
+		SignKey:         testGatewaySignKey,
 		PayoutNotifyURL: "https://payment-service.example/api/payments/callback",
 	})
 
@@ -451,12 +491,12 @@ func TestWorkflowPayoutApproveWithReviewTokenSucceeds(t *testing.T) {
 	}, 500000)
 	payoutService := service.NewPayoutService(
 		payoutStore,
-		providerRY.NewPayoutClient(upstream.URL, "50000", testRYSignKey, "https://payment-service.example/api/payments/callback", time.Second),
+		providerGateway.NewPayoutClient(upstream.URL, "50000", testGatewaySignKey, "https://payment-service.example/api/payments/callback", time.Second),
 	)
-	router := NewRouter(depositService, payoutService, config.AppConfig{PayoutReviewToken: "review-secret"}, config.RYConfig{
+	router := NewRouter(depositService, payoutService, config.AppConfig{PayoutReviewToken: "review-secret"}, config.GatewayConfig{
 		BaseURL:         upstream.URL,
 		CustomerID:      "50000",
-		SignKey:         testRYSignKey,
+		SignKey:         testGatewaySignKey,
 		PayoutNotifyURL: "https://payment-service.example/api/payments/callback",
 	})
 
@@ -505,10 +545,10 @@ func TestWorkflowPayoutCancelRequiresReviewToken(t *testing.T) {
 	}, 500000)
 	payoutService := service.NewPayoutService(
 		payoutStore,
-		providerRY.NewPayoutClient("", "50000", testRYSignKey, "https://payment-service.example/api/payments/callback", time.Second),
+		providerGateway.NewPayoutClient("", "50000", testGatewaySignKey, "https://payment-service.example/api/payments/callback", time.Second),
 	)
-	router := NewRouter(depositService, payoutService, config.AppConfig{PayoutReviewToken: "review-secret"}, config.RYConfig{
-		SignKey:         testRYSignKey,
+	router := NewRouter(depositService, payoutService, config.AppConfig{PayoutReviewToken: "review-secret"}, config.GatewayConfig{
+		SignKey:         testGatewaySignKey,
 		PayoutNotifyURL: "https://payment-service.example/api/payments/callback",
 	})
 
@@ -556,10 +596,10 @@ func TestWorkflowPayoutCancelWithReviewTokenSucceeds(t *testing.T) {
 	}, 500000)
 	payoutService := service.NewPayoutService(
 		payoutStore,
-		providerRY.NewPayoutClient("", "50000", testRYSignKey, "https://payment-service.example/api/payments/callback", time.Second),
+		providerGateway.NewPayoutClient("", "50000", testGatewaySignKey, "https://payment-service.example/api/payments/callback", time.Second),
 	)
-	router := NewRouter(depositService, payoutService, config.AppConfig{PayoutReviewToken: "review-secret"}, config.RYConfig{
-		SignKey:         testRYSignKey,
+	router := NewRouter(depositService, payoutService, config.AppConfig{PayoutReviewToken: "review-secret"}, config.GatewayConfig{
+		SignKey:         testGatewaySignKey,
 		PayoutNotifyURL: "https://payment-service.example/api/payments/callback",
 	})
 
@@ -593,5 +633,187 @@ func TestWorkflowPayoutCancelWithReviewTokenSucceeds(t *testing.T) {
 	router.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"status":"cancelled"`) {
 		t.Fatalf("expected cancel success, got %d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestWorkflowPayoutResendCallbackWithReviewTokenSucceeds(t *testing.T) {
+	callbackBody := make(chan string, 1)
+	callbackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := new(bytes.Buffer)
+		_, _ = body.ReadFrom(r.Body)
+		callbackBody <- body.String()
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	}))
+	defer callbackServer.Close()
+
+	depositService := service.NewDepositService(
+		map[string]provider.DepositGateway{"fake": fakeDepositGateway{}},
+		map[string]string{"CREDIT": "fake"},
+		service.NewLedgerService(),
+	)
+	sum := sha256.Sum256([]byte("merchant-secret"))
+	payoutStore := repository.NewInMemoryPayoutStore()
+	payoutStore.SeedMerchant(domain.Merchant{
+		Code:   "M10001",
+		Name:   "Merchant 1",
+		APIKey: hex.EncodeToString(sum[:]),
+		Status: "active",
+	}, 500000)
+	payoutService := service.NewPayoutServiceWithSecrets(
+		payoutStore,
+		providerGateway.NewPayoutClient("", "50000", testGatewaySignKey, "https://payment-service.example/api/payments/callback", time.Second),
+		map[string]string{"M10001": "merchant-secret"},
+	)
+	router := NewRouter(depositService, payoutService, config.AppConfig{PayoutReviewToken: "review-secret"}, config.GatewayConfig{
+		SignKey:         testGatewaySignKey,
+		PayoutNotifyURL: "https://payment-service.example/api/payments/callback",
+	})
+
+	createResp := serveJSON(router, http.MethodPost, "/api/payouts", []byte(`{
+		"merchant_id":"M10001",
+		"api_key":"merchant-secret",
+		"merchant_payout_no":"WD-RESEND-001",
+		"amount":"100.00",
+		"currency":"TWD",
+		"callback_url":"`+callbackServer.URL+`",
+		"pay_account_name":"Tester",
+		"pay_card_no":"202008372239",
+		"pay_bank_name":"013"
+	}`))
+	if createResp.Code != http.StatusOK {
+		t.Fatalf("create payout workflow failed: status=%d body=%s", createResp.Code, createResp.Body.String())
+	}
+	var created struct {
+		Data struct {
+			PayoutNo string `json:"payout_no"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(createResp.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal create response: %v", err)
+	}
+
+	cancelReq := httptest.NewRequest(http.MethodPost, "/api/payouts/"+created.Data.PayoutNo+"/cancel", strings.NewReader(`{"reason":"ops cancel"}`))
+	cancelReq.Header.Set("Content-Type", "application/json")
+	cancelReq.Header.Set("X-Payout-Review-Token", "review-secret")
+	cancelResp := httptest.NewRecorder()
+	router.ServeHTTP(cancelResp, cancelReq)
+	if cancelResp.Code != http.StatusOK {
+		t.Fatalf("cancel payout workflow failed: status=%d body=%s", cancelResp.Code, cancelResp.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/payouts/"+created.Data.PayoutNo+"/resend-callback", nil)
+	req.Header.Set("X-Payout-Review-Token", "review-secret")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected resend success, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	select {
+	case payload := <-callbackBody:
+		if !strings.Contains(payload, `"merchant_payout_no":"WD-RESEND-001"`) {
+			t.Fatalf("unexpected callback payload: %s", payload)
+		}
+		if !strings.Contains(payload, `"sign":"`) {
+			t.Fatalf("callback payload missing sign: %s", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected callback resend to reach merchant endpoint")
+	}
+}
+
+func TestMerchantAPIKeyRotateListAndRevoke(t *testing.T) {
+	depositService := service.NewDepositService(
+		map[string]provider.DepositGateway{"fake": fakeDepositGateway{}},
+		map[string]string{"CREDIT": "fake"},
+		service.NewLedgerService(),
+	)
+	payoutStore := repository.NewInMemoryPayoutStore()
+	payoutStore.SeedMerchant(domain.Merchant{
+		Code:   "M10001",
+		Name:   "Merchant 1",
+		APIKey: "merchant-secret",
+		Status: "active",
+	}, 500000)
+	payoutService := service.NewPayoutServiceWithSecrets(
+		payoutStore,
+		providerGateway.NewPayoutClient("", "50000", testGatewaySignKey, "https://payment-service.example/api/payments/callback", time.Second),
+		map[string]string{"M10001": "merchant-secret"},
+	)
+	router := NewRouter(depositService, payoutService, config.AppConfig{PayoutReviewToken: "review-secret"}, config.GatewayConfig{
+		SignKey:         testGatewaySignKey,
+		PayoutNotifyURL: "https://payment-service.example/api/payments/callback",
+	})
+
+	rotateReq := httptest.NewRequest(http.MethodPost, "/api/merchants/M10001/api-keys/rotate", strings.NewReader(`{"api_key":"merchant-secret-v2","expires_at":"2026-12-31T00:00:00Z"}`))
+	rotateReq.Header.Set("Content-Type", "application/json")
+	rotateReq.Header.Set("X-Payout-Review-Token", "review-secret")
+	rotateResp := httptest.NewRecorder()
+	router.ServeHTTP(rotateResp, rotateReq)
+	if rotateResp.Code != http.StatusOK || !strings.Contains(rotateResp.Body.String(), `"status":"active"`) {
+		t.Fatalf("rotate merchant api key failed: status=%d body=%s", rotateResp.Code, rotateResp.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/merchants/M10001/api-keys", nil)
+	listReq.Header.Set("X-Payout-Review-Token", "review-secret")
+	listResp := httptest.NewRecorder()
+	router.ServeHTTP(listResp, listReq)
+	if listResp.Code != http.StatusOK || !strings.Contains(listResp.Body.String(), `"is_primary":true`) {
+		t.Fatalf("list merchant api keys failed: status=%d body=%s", listResp.Code, listResp.Body.String())
+	}
+
+	createResp := serveJSON(router, http.MethodPost, "/api/payouts", []byte(`{
+		"merchant_id":"M10001",
+		"api_key":"merchant-secret-v2",
+		"merchant_payout_no":"WD-ROTATE-001",
+		"amount":"100.00",
+		"currency":"TWD",
+		"callback_url":"https://merchant.example/payout-callback",
+		"pay_account_name":"Tester",
+		"pay_card_no":"202008372239",
+		"pay_bank_name":"013"
+	}`))
+	if createResp.Code != http.StatusOK {
+		t.Fatalf("rotated key should authenticate: status=%d body=%s", createResp.Code, createResp.Body.String())
+	}
+
+	oldKeyResp := serveJSON(router, http.MethodPost, "/api/payouts", []byte(`{
+		"merchant_id":"M10001",
+		"api_key":"merchant-secret",
+		"merchant_payout_no":"WD-ROTATE-002",
+		"amount":"100.00",
+		"currency":"TWD",
+		"callback_url":"https://merchant.example/payout-callback",
+		"pay_account_name":"Tester",
+		"pay_card_no":"202008372239",
+		"pay_bank_name":"013"
+	}`))
+	if oldKeyResp.Code != http.StatusUnauthorized {
+		t.Fatalf("old key should be invalid after rotation: status=%d body=%s", oldKeyResp.Code, oldKeyResp.Body.String())
+	}
+
+	revokeReq := httptest.NewRequest(http.MethodPost, "/api/merchants/M10001/api-keys/revoke", strings.NewReader(`{"api_key":"merchant-secret-v2"}`))
+	revokeReq.Header.Set("Content-Type", "application/json")
+	revokeReq.Header.Set("X-Payout-Review-Token", "review-secret")
+	revokeResp := httptest.NewRecorder()
+	router.ServeHTTP(revokeResp, revokeReq)
+	if revokeResp.Code != http.StatusOK || !strings.Contains(revokeResp.Body.String(), `"status":"revoked"`) {
+		t.Fatalf("revoke merchant api key failed: status=%d body=%s", revokeResp.Code, revokeResp.Body.String())
+	}
+
+	revokedKeyResp := serveJSON(router, http.MethodPost, "/api/payouts", []byte(`{
+		"merchant_id":"M10001",
+		"api_key":"merchant-secret-v2",
+		"merchant_payout_no":"WD-ROTATE-003",
+		"amount":"100.00",
+		"currency":"TWD",
+		"callback_url":"https://merchant.example/payout-callback",
+		"pay_account_name":"Tester",
+		"pay_card_no":"202008372239",
+		"pay_bank_name":"013"
+	}`))
+	if revokedKeyResp.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked key should no longer authenticate: status=%d body=%s", revokedKeyResp.Code, revokedKeyResp.Body.String())
 	}
 }

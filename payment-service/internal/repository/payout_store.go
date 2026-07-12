@@ -27,6 +27,10 @@ type PayoutProviderResult struct {
 
 type PayoutStore interface {
 	FindMerchantByCode(ctx context.Context, code string) (domain.Merchant, error)
+	ValidateMerchantAPIKey(ctx context.Context, merchantID int64, apiKey string) (bool, error)
+	ListMerchantAPIKeys(ctx context.Context, merchantCode string) ([]MerchantAPIKeyRecord, error)
+	RotateMerchantAPIKey(ctx context.Context, merchantCode, apiKey string, expiresAt *time.Time) ([]MerchantAPIKeyRecord, error)
+	RevokeMerchantAPIKey(ctx context.Context, merchantCode, apiKey string) ([]MerchantAPIKeyRecord, error)
 	CreatePayoutOrder(ctx context.Context, order domain.PayoutOrder, beneficiary domain.PayoutBeneficiary) (domain.PayoutOrder, error)
 	FindPayoutOrderByPayoutNo(ctx context.Context, payoutNo string) (domain.PayoutOrder, error)
 	FindPayoutOrderByMerchantPayoutNo(ctx context.Context, merchantCode, merchantPayoutNo string) (domain.PayoutOrder, error)
@@ -56,6 +60,7 @@ type InMemoryPayoutStore struct {
 	attempts        map[string][]domain.PayoutTransaction
 	callbackEvents  map[string]struct{}
 	tasks           map[int64]domain.MerchantPayoutCallbackTask
+	merchantAPIKeys map[int64][]MerchantAPIKeyRecord
 }
 
 func NewInMemoryPayoutStore() *InMemoryPayoutStore {
@@ -72,6 +77,7 @@ func NewInMemoryPayoutStore() *InMemoryPayoutStore {
 		attempts:        make(map[string][]domain.PayoutTransaction),
 		callbackEvents:  make(map[string]struct{}),
 		tasks:           make(map[int64]domain.MerchantPayoutCallbackTask),
+		merchantAPIKeys: make(map[int64][]MerchantAPIKeyRecord),
 	}
 }
 
@@ -92,6 +98,19 @@ func (s *InMemoryPayoutStore) SeedMerchant(merchant domain.Merchant, availableCe
 	}
 	s.merchants[merchant.Code] = merchant
 	s.balances[balanceKey(merchant.ID, "TWD")] = availableCents
+	if strings.TrimSpace(merchant.APIKey) != "" {
+		now := time.Now()
+		s.merchantAPIKeys[merchant.ID] = []MerchantAPIKeyRecord{{
+			ID:            1,
+			MerchantID:    merchant.ID,
+			KeyHash:       strings.TrimSpace(merchant.APIKey),
+			Status:        "active",
+			IsPrimary:     true,
+			LastRotatedAt: now,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}}
+	}
 }
 
 func (s *InMemoryPayoutStore) FindMerchantByCode(_ context.Context, code string) (domain.Merchant, error) {
@@ -102,6 +121,111 @@ func (s *InMemoryPayoutStore) FindMerchantByCode(_ context.Context, code string)
 		return domain.Merchant{}, ErrNotFound
 	}
 	return merchant, nil
+}
+
+func (s *InMemoryPayoutStore) ValidateMerchantAPIKey(_ context.Context, merchantID int64, apiKey string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if records, ok := s.merchantAPIKeys[merchantID]; ok && len(records) > 0 {
+		now := time.Now()
+		for idx, record := range records {
+			if record.Status == "revoked" || record.RevokedAt != nil {
+				continue
+			}
+			if record.ExpiresAt != nil && !record.ExpiresAt.After(now) {
+				continue
+			}
+			if merchantAPIKeyMatches(record.KeyHash, apiKey) {
+				record.LastUsedAt = &now
+				record.UpdatedAt = now
+				records[idx] = record
+				s.merchantAPIKeys[merchantID] = records
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	for _, merchant := range s.merchants {
+		if merchant.ID == merchantID {
+			return merchantAPIKeyMatches(merchant.APIKey, apiKey), nil
+		}
+	}
+	return false, ErrNotFound
+}
+
+func (s *InMemoryPayoutStore) ListMerchantAPIKeys(_ context.Context, merchantCode string) ([]MerchantAPIKeyRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	merchant, ok := s.merchants[strings.TrimSpace(merchantCode)]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	records := append([]MerchantAPIKeyRecord(nil), s.merchantAPIKeys[merchant.ID]...)
+	return records, nil
+}
+
+func (s *InMemoryPayoutStore) RotateMerchantAPIKey(_ context.Context, merchantCode, apiKey string, expiresAt *time.Time) ([]MerchantAPIKeyRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	merchant, ok := s.merchants[strings.TrimSpace(merchantCode)]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil, errors.New("api_key is required")
+	}
+	now := time.Now()
+	records := append([]MerchantAPIKeyRecord(nil), s.merchantAPIKeys[merchant.ID]...)
+	for idx := range records {
+		records[idx].Status = "revoked"
+		records[idx].IsPrimary = false
+		records[idx].UpdatedAt = now
+		if records[idx].RevokedAt == nil {
+			records[idx].RevokedAt = &now
+		}
+	}
+	records = append([]MerchantAPIKeyRecord{{
+		ID:            int64(len(records) + 1),
+		MerchantID:    merchant.ID,
+		KeyHash:       hashMerchantAPIKey(apiKey),
+		Status:        "active",
+		IsPrimary:     true,
+		LastRotatedAt: now,
+		ExpiresAt:     expiresAt,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}}, records...)
+	s.merchantAPIKeys[merchant.ID] = records
+	return append([]MerchantAPIKeyRecord(nil), records...), nil
+}
+
+func (s *InMemoryPayoutStore) RevokeMerchantAPIKey(_ context.Context, merchantCode, apiKey string) ([]MerchantAPIKeyRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	merchant, ok := s.merchants[strings.TrimSpace(merchantCode)]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	records := append([]MerchantAPIKeyRecord(nil), s.merchantAPIKeys[merchant.ID]...)
+	now := time.Now()
+	found := false
+	for idx := range records {
+		if merchantAPIKeyMatches(records[idx].KeyHash, apiKey) {
+			records[idx].Status = "revoked"
+			records[idx].IsPrimary = false
+			records[idx].UpdatedAt = now
+			if records[idx].RevokedAt == nil {
+				records[idx].RevokedAt = &now
+			}
+			found = true
+		}
+	}
+	if !found {
+		return nil, ErrNotFound
+	}
+	s.merchantAPIKeys[merchant.ID] = records
+	return append([]MerchantAPIKeyRecord(nil), records...), nil
 }
 
 func (s *InMemoryPayoutStore) CreatePayoutOrder(_ context.Context, order domain.PayoutOrder, beneficiary domain.PayoutBeneficiary) (domain.PayoutOrder, error) {
@@ -446,6 +570,123 @@ func (s *MySQLPayoutStore) FindMerchantByCode(ctx context.Context, code string) 
 		return domain.Merchant{}, ErrNotFound
 	}
 	return merchant, err
+}
+
+func (s *MySQLPayoutStore) ValidateMerchantAPIKey(ctx context.Context, merchantID int64, apiKey string) (bool, error) {
+	keyHash := hashMerchantAPIKey(apiKey)
+
+	var anyManagedKey int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(1)
+		FROM merchant_api_keys
+		WHERE merchant_id = ?
+	`, merchantID).Scan(&anyManagedKey)
+	if err != nil {
+		return false, err
+	}
+	if anyManagedKey > 0 {
+		var matched int
+		err = s.db.QueryRowContext(ctx, `
+		SELECT 1
+		FROM merchant_api_keys
+		WHERE merchant_id = ?
+		  AND status = 'active'
+		  AND key_hash = ?
+		  AND revoked_at IS NULL
+		  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+		LIMIT 1
+	`, merchantID, keyHash).Scan(&matched)
+		if err == nil {
+			_, _ = s.db.ExecContext(ctx, `
+				UPDATE merchant_api_keys
+				SET last_used_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+				WHERE merchant_id = ? AND key_hash = ?
+			`, merchantID, keyHash)
+			return true, nil
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return false, err
+		}
+		return false, nil
+	}
+
+	var legacySecret string
+	err = s.db.QueryRowContext(ctx, `
+		SELECT api_key_hash
+		FROM merchants
+		WHERE id = ?
+		LIMIT 1
+	`, merchantID).Scan(&legacySecret)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	return merchantAPIKeyMatches(legacySecret, apiKey), nil
+}
+
+func (s *MySQLPayoutStore) ListMerchantAPIKeys(ctx context.Context, merchantCode string) ([]MerchantAPIKeyRecord, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback(tx)
+	merchant, err := findMerchantForUpdate(ctx, tx, strings.TrimSpace(merchantCode))
+	if err != nil {
+		return nil, err
+	}
+	records, err := listMerchantAPIKeysTx(ctx, tx, merchant.ID)
+	if err != nil {
+		return nil, err
+	}
+	return records, tx.Commit()
+}
+
+func (s *MySQLPayoutStore) RotateMerchantAPIKey(ctx context.Context, merchantCode, apiKey string, expiresAt *time.Time) ([]MerchantAPIKeyRecord, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback(tx)
+	merchant, err := findMerchantForUpdate(ctx, tx, strings.TrimSpace(merchantCode))
+	if err != nil {
+		return nil, err
+	}
+	if err := insertMerchantAPIKeyTx(ctx, tx, merchant.ID, apiKey, expiresAt); err != nil {
+		return nil, err
+	}
+	records, err := listMerchantAPIKeysTx(ctx, tx, merchant.ID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
+func (s *MySQLPayoutStore) RevokeMerchantAPIKey(ctx context.Context, merchantCode, apiKey string) ([]MerchantAPIKeyRecord, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback(tx)
+	merchant, err := findMerchantForUpdate(ctx, tx, strings.TrimSpace(merchantCode))
+	if err != nil {
+		return nil, err
+	}
+	if err := revokeMerchantAPIKeyTx(ctx, tx, merchant.ID, apiKey); err != nil {
+		return nil, err
+	}
+	records, err := listMerchantAPIKeysTx(ctx, tx, merchant.ID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return records, nil
 }
 
 func (s *MySQLPayoutStore) CreatePayoutOrder(ctx context.Context, order domain.PayoutOrder, beneficiary domain.PayoutBeneficiary) (domain.PayoutOrder, error) {

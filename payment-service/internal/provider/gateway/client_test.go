@@ -1,4 +1,4 @@
-package ry
+package gateway
 
 import (
 	"context"
@@ -18,17 +18,17 @@ func TestSignMatchesProviderExample(t *testing.T) {
 		},
 		"pay_amount":      "10000",
 		"pay_apply_date":  "1693236045",
-		"pay_channel_id":  "渠道代碼",
+		"pay_channel_id":  "1000",
 		"pay_customer_id": "88888",
-		"pay_notify_url":  "https://貴司接收訂單通知的網址",
+		"pay_notify_url":  "https://merchant.example/callback",
 		"pay_order_id":    "TEST0123456",
-		"user_name":       "客戶姓名",
+		"user_name":       "Tester",
 	}
 	got, err := Sign(fields, "12345")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "74A556F0414A605B538FC832B46A5420" {
+	if got != "A152D7087315CF82CE9983EA03105D29" {
 		t.Fatalf("unexpected signature: %s", got)
 	}
 }
@@ -52,7 +52,7 @@ func TestCreatePayoutUsesProviderPathAndSignsPayload(t *testing.T) {
 	result, err := client.CreatePayout(context.Background(), CreatePayoutRequest{
 		PayOrderID:     "ORDER-1",
 		PayAmount:      "100.00",
-		PayAccountName: "周傑倫",
+		PayAccountName: "Tester",
 		PayCardNo:      "202008372239",
 		PayBankName:    "013",
 	})
@@ -117,7 +117,7 @@ func TestCreatePayoutRejectsUnsupportedBankCode(t *testing.T) {
 		PayCardNo:      "202008372239",
 		PayBankName:    "000",
 	})
-	if err == nil || err.Error() != "pay_bank_name is not in RY supported bank code whitelist" {
+	if err == nil || err.Error() != "pay_bank_name is not in gateway supported bank code whitelist" {
 		t.Fatalf("expected whitelist error, got %v", err)
 	}
 }
@@ -127,7 +127,7 @@ func TestVerifyPayoutCallback(t *testing.T) {
 	req := PayoutCallbackRequest{
 		CustomerID: 50000, OrderID: "ORDER-1", Amount: "300.0000",
 		DateTime: "2020-05-12 21:06:57", TransactionID: "P123",
-		TransactionCode: "30000", TransactionMsg: "支付成功",
+		TransactionCode: "30000", TransactionMsg: "paid",
 	}
 	req.Sign, _ = Sign(map[string]any{
 		"customer_id": req.CustomerID, "order_id": req.OrderID, "amount": req.Amount,

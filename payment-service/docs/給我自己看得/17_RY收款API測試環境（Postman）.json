@@ -1,10 +1,10 @@
 {
   "id": "26e0cfe8-f01d-45c5-bf02-payment-service-env",
-  "name": "Payment Service Test Environment",
+  "name": "RIG001 Gateway Test Environment",
   "values": [
-    { "key": "base_url", "value": "https://payment-service.0f2006wzt5v7m.ap-east-1.cs.amazonlightsail.com", "type": "default", "enabled": true },
-    { "key": "ry_sign_key", "value": "your_ry_sign_key", "type": "secret", "enabled": true },
-    { "key": "pay_customer_id", "value": "M10001", "type": "default", "enabled": true },
+    { "key": "base_url", "value": "https://api.nnviopp.com", "type": "default", "enabled": true },
+    { "key": "gateway_sign_key", "value": "your_gateway_sign_key", "type": "secret", "enabled": true },
+    { "key": "pay_customer_id", "value": "RIG001", "type": "default", "enabled": true },
     { "key": "pay_notify_url", "value": "https://merchant.example.com/callback", "type": "default", "enabled": true },
     { "key": "pay_channel_id", "value": "1000", "type": "default", "enabled": true },
     { "key": "pay_amount", "value": "1000", "type": "default", "enabled": true },
@@ -22,7 +22,7 @@
     { "key": "query_apply_date", "value": "", "type": "default", "enabled": true },
     { "key": "query_md5_sign", "value": "", "type": "default", "enabled": true },
     { "key": "transaction_id", "value": "", "type": "default", "enabled": true },
-    { "key": "merchant_id", "value": "M10001", "type": "default", "enabled": true },
+    { "key": "merchant_id", "value": "RIG001", "type": "default", "enabled": true },
     { "key": "merchant_api_key", "value": "merchant-secret", "type": "secret", "enabled": true },
     { "key": "merchant_callback_url", "value": "https://merchant.example.com/payout-callback", "type": "default", "enabled": true },
     { "key": "merchant_payout_no", "value": "", "type": "default", "enabled": true },

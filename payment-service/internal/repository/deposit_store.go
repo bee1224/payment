@@ -29,11 +29,12 @@ type MySQLDepositStore struct {
 }
 
 type storedDepositPaymentRequestPayload struct {
-	Payment provider.DepositPaymentRequest `json:"payment"`
-	RY     storedRYDepositRequestPayload `json:"ry"`
+	Payment provider.DepositPaymentRequest     `json:"payment"`
+	Gateway storedGatewayDepositRequestPayload `json:"gateway"`
+	RY      storedGatewayDepositRequestPayload `json:"ry,omitempty"`
 }
 
-type storedRYDepositRequestPayload struct {
+type storedGatewayDepositRequestPayload struct {
 	CallbackURL  string   `json:"callback_url,omitempty"`
 	BankAccounts []string `json:"bank_account,omitempty"`
 	StoreNumbers []string `json:"store_number,omitempty"`
@@ -101,7 +102,7 @@ func (s *MySQLDepositStore) CreateDepositOrder(ctx context.Context, order domain
 func (s *MySQLDepositStore) SaveDepositPaymentRequest(ctx context.Context, order domain.DepositOrder, payment provider.DepositPaymentRequest) error {
 	payload, err := json.Marshal(storedDepositPaymentRequestPayload{
 		Payment: payment,
-		RY: storedRYDepositRequestPayload{
+		Gateway: storedGatewayDepositRequestPayload{
 			CallbackURL:  order.CallbackURL,
 			BankAccounts: append([]string(nil), order.BankAccounts...),
 			StoreNumbers: append([]string(nil), order.StoreNumbers...),
@@ -150,7 +151,7 @@ func (s *MySQLDepositStore) FindDepositOrderByOrderNo(ctx context.Context, order
 		return domain.DepositOrder{}, err
 	}
 	order.Status = domain.DepositOrderStatus(status)
-	applyStoredRYDepositRequestPayload(&order, requestPayload)
+	applyStoredGatewayDepositRequestPayload(&order, requestPayload)
 	return order, nil
 }
 
@@ -181,7 +182,7 @@ func (s *MySQLDepositStore) FindDepositOrderByMerchantOrderNo(ctx context.Contex
 		return domain.DepositOrder{}, err
 	}
 	order.Status = domain.DepositOrderStatus(status)
-	applyStoredRYDepositRequestPayload(&order, requestPayload)
+	applyStoredGatewayDepositRequestPayload(&order, requestPayload)
 	return order, nil
 }
 
@@ -404,7 +405,7 @@ func findDepositOrderForUpdate(ctx context.Context, tx *sql.Tx, providerID int64
 	}
 	order.Provider = normalizeProviderCode(order.Provider)
 	order.Status = domain.DepositOrderStatus(status)
-	applyStoredRYDepositRequestPayload(&order, requestPayload)
+	applyStoredGatewayDepositRequestPayload(&order, requestPayload)
 	return order, nil
 }
 
@@ -416,14 +417,18 @@ func normalizeProviderCode(code string) string {
 	return code
 }
 
-func applyStoredRYDepositRequestPayload(order *domain.DepositOrder, payload []byte) {
+func applyStoredGatewayDepositRequestPayload(order *domain.DepositOrder, payload []byte) {
 	if order == nil || len(payload) == 0 {
 		return
 	}
 
 	var wrapped storedDepositPaymentRequestPayload
 	if err := json.Unmarshal(payload, &wrapped); err == nil {
-		mergeRYDepositPayload(order, wrapped.RY)
+		if hasStoredGatewayDepositPayload(wrapped.Gateway) {
+			mergeGatewayDepositPayload(order, wrapped.Gateway)
+			return
+		}
+		mergeGatewayDepositPayload(order, wrapped.RY)
 		return
 	}
 
@@ -433,7 +438,18 @@ func applyStoredRYDepositRequestPayload(order *domain.DepositOrder, payload []by
 	}
 }
 
-func mergeRYDepositPayload(order *domain.DepositOrder, ry storedRYDepositRequestPayload) {
+func hasStoredGatewayDepositPayload(payload storedGatewayDepositRequestPayload) bool {
+	return payload.CallbackURL != "" ||
+		len(payload.BankAccounts) > 0 ||
+		len(payload.StoreNumbers) > 0 ||
+		payload.UserName != "" ||
+		payload.BankID != "" ||
+		payload.PayCurrency != "" ||
+		payload.Mobile != "" ||
+		payload.IDNo != ""
+}
+
+func mergeGatewayDepositPayload(order *domain.DepositOrder, ry storedGatewayDepositRequestPayload) {
 	if order.CallbackURL == "" {
 		order.CallbackURL = ry.CallbackURL
 	}

@@ -1,4 +1,4 @@
-# Payment Service
+# RIG001 Gateway
 
 整合代收與代付流程的服務，目前代收實作已收斂為 `NewebPay` 單一 provider，並只對外提供 7 種收款方式。
 
@@ -22,6 +22,19 @@
 go mod tidy
 go run ./cmd/api
 ```
+
+## Namecheap VPS 雙環境部署
+
+如果要在同一台 Namecheap VPS 同時跑正式與對接環境，專案已提供可直接套用的配置骨架：
+
+- 正式 env 範例：`.env.prod.example`
+- 測試 env 範例：`.env.test.example`
+- 正式 Nginx：`deploy/nginx/payment.conf`
+- 測試 Nginx：`deploy/nginx/payment-test.conf`
+- Namecheap 啟動腳本：`deploy/namecheap/bootstrap-dual-env.sh`
+- Namecheap IP 綁定 Nginx：`deploy/nginx/payment-prod-namecheap.conf`
+- Namecheap IP 綁定 Nginx：`deploy/nginx/payment-test-namecheap.conf`
+- 部署說明：`docs/dual-environment-namecheap-vps.md`
 
 ## API
 
@@ -48,7 +61,7 @@ go run ./cmd/api
 | 文件 | 說明 |
 |---|---|
 | [`docs/對外溝通用/01_RY完整技術文件.md`](docs/對外溝通用/01_RY完整技術文件.md) | 歷史整理版 RY 文件，已補充目前服務實際支援範圍 |
-| [`docs/對外溝通用/02_商戶端三方API對接文件.md`](docs/對外溝通用/02_商戶端三方API對接文件.md) | 商戶串接 payment-service 的最新代收文件 |
+| [`docs/對外溝通用/02_商戶端三方API對接文件.md`](docs/對外溝通用/02_商戶端三方API對接文件.md) | 商戶串接 RIG001 Gateway 的最新代收文件 |
 | [`docs/對外溝通用/03_商戶端代付API對接文件.md`](docs/對外溝通用/03_商戶端代付API對接文件.md) | 商戶端代付對接文件 |
 | [`docs/對外溝通用/04_銀行編碼.md`](docs/對外溝通用/04_銀行編碼.md) | 銀行代碼對照 |
 

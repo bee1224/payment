@@ -8,21 +8,21 @@ import (
 	"time"
 
 	"payment-service/internal/config"
-	providerRY "payment-service/internal/provider/ry"
+	providerGateway "payment-service/internal/provider/gateway"
 	"payment-service/internal/service"
 	"payment-service/pkg/response"
 )
 
 type PayoutHandler struct {
-	client      *providerRY.PayoutClient
+	client      *providerGateway.PayoutClient
 	service     *service.PayoutService
 	reviewToken string
 }
 
-func NewPayoutHandler(cfg config.RYConfig, payoutService *service.PayoutService, reviewToken string) *PayoutHandler {
+func NewPayoutHandler(cfg config.GatewayConfig, payoutService *service.PayoutService, reviewToken string) *PayoutHandler {
 	timeout := time.Duration(cfg.HTTPTimeoutSeconds) * time.Second
 	return &PayoutHandler{
-		client: providerRY.NewPayoutClient(
+		client: providerGateway.NewPayoutClient(
 			cfg.BaseURL,
 			cfg.CustomerID,
 			cfg.SignKey,
@@ -35,7 +35,7 @@ func NewPayoutHandler(cfg config.RYConfig, payoutService *service.PayoutService,
 }
 
 func (h *PayoutHandler) CreatePayoutOrder(w nethttp.ResponseWriter, r *nethttp.Request) {
-	var req providerRY.CreatePayoutRequest
+	var req providerGateway.CreatePayoutRequest
 	if err := decodePayoutJSON(r, &req); err != nil {
 		writePayoutError(w, nethttp.StatusBadRequest, err.Error())
 		return
@@ -49,7 +49,7 @@ func (h *PayoutHandler) CreatePayoutOrder(w nethttp.ResponseWriter, r *nethttp.R
 }
 
 func (h *PayoutHandler) QueryPayoutTransaction(w nethttp.ResponseWriter, r *nethttp.Request) {
-	var req providerRY.QueryPayoutRequest
+	var req providerGateway.QueryPayoutRequest
 	if err := decodePayoutJSON(r, &req); err != nil {
 		writePayoutError(w, nethttp.StatusBadRequest, err.Error())
 		return
@@ -63,7 +63,7 @@ func (h *PayoutHandler) QueryPayoutTransaction(w nethttp.ResponseWriter, r *neth
 }
 
 func (h *PayoutHandler) QueryPayoutBalance(w nethttp.ResponseWriter, r *nethttp.Request) {
-	var req providerRY.BalanceRequest
+	var req providerGateway.BalanceRequest
 	if err := decodePayoutJSON(r, &req); err != nil {
 		writePayoutError(w, nethttp.StatusBadRequest, err.Error())
 		return
@@ -190,8 +190,86 @@ func (h *PayoutHandler) CancelWorkflowPayout(w nethttp.ResponseWriter, r *nethtt
 	})
 }
 
+func (h *PayoutHandler) ResendWorkflowPayoutCallback(w nethttp.ResponseWriter, r *nethttp.Request) {
+	if err := h.authorizePayoutReview(r); err != nil {
+		writePayoutError(w, nethttp.StatusUnauthorized, err.Error())
+		return
+	}
+	order, err := h.service.ResendMerchantCallback(r.Context(), r.PathValue("payout_no"))
+	if err != nil {
+		writeWorkflowPayoutError(w, err)
+		return
+	}
+	response.JSON(w, nethttp.StatusOK, map[string]any{
+		"code":    0,
+		"message": "success",
+		"data":    service.BuildPayoutOrderView(order),
+	})
+}
+
+func (h *PayoutHandler) ListMerchantAPIKeys(w nethttp.ResponseWriter, r *nethttp.Request) {
+	if err := h.authorizePayoutReview(r); err != nil {
+		writePayoutError(w, nethttp.StatusUnauthorized, err.Error())
+		return
+	}
+	keys, err := h.service.ListMerchantAPIKeys(r.Context(), r.PathValue("merchant_id"))
+	if err != nil {
+		writeWorkflowPayoutError(w, err)
+		return
+	}
+	response.JSON(w, nethttp.StatusOK, map[string]any{
+		"code":    0,
+		"message": "success",
+		"data":    keys,
+	})
+}
+
+func (h *PayoutHandler) RotateMerchantAPIKey(w nethttp.ResponseWriter, r *nethttp.Request) {
+	if err := h.authorizePayoutReview(r); err != nil {
+		writePayoutError(w, nethttp.StatusUnauthorized, err.Error())
+		return
+	}
+	var req service.RotateMerchantAPIKeyRequest
+	if err := decodePayoutJSON(r, &req); err != nil {
+		writePayoutError(w, nethttp.StatusBadRequest, err.Error())
+		return
+	}
+	keys, err := h.service.RotateMerchantAPIKey(r.Context(), r.PathValue("merchant_id"), req)
+	if err != nil {
+		writeWorkflowPayoutError(w, err)
+		return
+	}
+	response.JSON(w, nethttp.StatusOK, map[string]any{
+		"code":    0,
+		"message": "success",
+		"data":    keys,
+	})
+}
+
+func (h *PayoutHandler) RevokeMerchantAPIKey(w nethttp.ResponseWriter, r *nethttp.Request) {
+	if err := h.authorizePayoutReview(r); err != nil {
+		writePayoutError(w, nethttp.StatusUnauthorized, err.Error())
+		return
+	}
+	var req service.RevokeMerchantAPIKeyRequest
+	if err := decodePayoutJSON(r, &req); err != nil {
+		writePayoutError(w, nethttp.StatusBadRequest, err.Error())
+		return
+	}
+	keys, err := h.service.RevokeMerchantAPIKey(r.Context(), r.PathValue("merchant_id"), req)
+	if err != nil {
+		writeWorkflowPayoutError(w, err)
+		return
+	}
+	response.JSON(w, nethttp.StatusOK, map[string]any{
+		"code":    0,
+		"message": "success",
+		"data":    keys,
+	})
+}
+
 func (h *PayoutHandler) PayoutCallback(w nethttp.ResponseWriter, r *nethttp.Request) {
-	var req providerRY.PayoutCallbackRequest
+	var req providerGateway.PayoutCallbackRequest
 	if err := decodePayoutJSON(r, &req); err != nil {
 		writePayoutError(w, nethttp.StatusBadRequest, err.Error())
 		return
@@ -204,7 +282,7 @@ func (h *PayoutHandler) PayoutCallback(w nethttp.ResponseWriter, r *nethttp.Requ
 		writePayoutError(w, nethttp.StatusBadRequest, "unsupported transaction_code")
 		return
 	}
-	if _, _, err := h.service.HandleRYCallback(r.Context(), req); err != nil {
+	if _, _, err := h.service.HandleGatewayCallback(r.Context(), req); err != nil {
 		writePayoutError(w, nethttp.StatusBadRequest, err.Error())
 		return
 	}
@@ -230,7 +308,7 @@ func writePayoutError(w nethttp.ResponseWriter, status int, message string) {
 }
 
 func writePayoutUpstreamError(w nethttp.ResponseWriter, err error) {
-	message := "RY payout request failed; confirm the order in the provider back office or query API before retrying"
+	message := "gateway payout request failed; confirm the order in the upstream back office or query API before retrying"
 	if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "must be") ||
 		strings.Contains(err.Error(), "does not match") || strings.Contains(err.Error(), "not configured") {
 		writePayoutError(w, nethttp.StatusBadRequest, err.Error())
@@ -246,7 +324,9 @@ func writeWorkflowPayoutError(w nethttp.ResponseWriter, err error) {
 	case strings.Contains(err.Error(), "required"),
 		strings.Contains(err.Error(), "invalid"),
 		strings.Contains(err.Error(), "must be"),
+		strings.Contains(err.Error(), "RFC3339"),
 		strings.Contains(err.Error(), "whitelist"),
+		strings.Contains(err.Error(), "callback_url"),
 		strings.Contains(err.Error(), "insufficient"),
 		strings.Contains(err.Error(), "cannot be"),
 		strings.Contains(err.Error(), "cannot be cancelled"):

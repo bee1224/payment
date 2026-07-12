@@ -11,11 +11,11 @@ import (
 
 type DepositHandler struct {
 	depositService *service.DepositService
-	ry            RYSecurityConfig
+	gateway        GatewaySecurityConfig
 }
 
-func NewDepositHandler(depositService *service.DepositService, ry RYSecurityConfig) *DepositHandler {
-	return &DepositHandler{depositService: depositService, ry: ry}
+func NewDepositHandler(depositService *service.DepositService, gateway GatewaySecurityConfig) *DepositHandler {
+	return &DepositHandler{depositService: depositService, gateway: gateway}
 }
 
 func (h *DepositHandler) CreateDeposit(w nethttp.ResponseWriter, r *nethttp.Request) {

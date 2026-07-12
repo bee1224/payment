@@ -30,8 +30,8 @@ func (h *DepositHandler) DepositProviderNotify(w nethttp.ResponseWriter, r *neth
 		return
 	}
 	log.Printf("%s notify success: order_no=%s status=%s trade_no=%s %s", providerCode, result.Order.OrderNo, result.Order.Status, result.Order.ProviderTradeNo, notifyFingerprint(fields))
-	if err := h.deliverRYDepositCallback(result.Order); err != nil {
-		log.Printf("ry callback failed: order_no=%s error=%v", result.Order.OrderNo, err)
+	if err := h.deliverGatewayDepositCallback(result.Order); err != nil {
+		log.Printf("gateway callback failed: order_no=%s error=%v", result.Order.OrderNo, err)
 	}
 
 	response.JSON(w, nethttp.StatusOK, map[string]any{

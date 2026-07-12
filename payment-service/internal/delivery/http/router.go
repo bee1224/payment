@@ -8,16 +8,16 @@ import (
 	"payment-service/internal/service"
 )
 
-func NewRouter(depositService *service.DepositService, payoutService *service.PayoutService, appCfg config.AppConfig, ry config.RYConfig) http.Handler {
-	depositHandler := NewDepositHandler(depositService, RYSecurityConfig{
-		SignKey:        ry.SignKey,
-		MaxSkewSeconds: ry.MaxSkewSeconds,
+func NewRouter(depositService *service.DepositService, payoutService *service.PayoutService, appCfg config.AppConfig, gatewayCfg config.GatewayConfig) http.Handler {
+	depositHandler := NewDepositHandler(depositService, GatewaySecurityConfig{
+		SignKey:        gatewayCfg.SignKey,
+		MaxSkewSeconds: gatewayCfg.MaxSkewSeconds,
 	})
-	payoutHandler := NewPayoutHandler(ry, payoutService, appCfg.PayoutReviewToken)
+	payoutHandler := NewPayoutHandler(gatewayCfg, payoutService, appCfg.PayoutReviewToken)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", HealthHandler)
 
-	// Canonical RY collection APIs use the names defined by the provider contract.
+	// Canonical gateway-compatible collection APIs keep the existing provider contract field names.
 	mux.HandleFunc("POST /api/pay_order", depositHandler.CreatePayOrder)
 	mux.HandleFunc("POST /api/query_transaction", depositHandler.QueryTransaction)
 	mux.HandleFunc("POST /api/payments/pay_order", payoutHandler.CreatePayoutOrder)
@@ -30,6 +30,10 @@ func NewRouter(depositService *service.DepositService, payoutService *service.Pa
 	mux.HandleFunc("POST /api/payouts/{payout_no}/approve", payoutHandler.ApproveWorkflowPayout)
 	mux.HandleFunc("POST /api/payouts/{payout_no}/reject", payoutHandler.RejectWorkflowPayout)
 	mux.HandleFunc("POST /api/payouts/{payout_no}/cancel", payoutHandler.CancelWorkflowPayout)
+	mux.HandleFunc("POST /api/payouts/{payout_no}/resend-callback", payoutHandler.ResendWorkflowPayoutCallback)
+	mux.HandleFunc("GET /api/merchants/{merchant_id}/api-keys", payoutHandler.ListMerchantAPIKeys)
+	mux.HandleFunc("POST /api/merchants/{merchant_id}/api-keys/rotate", payoutHandler.RotateMerchantAPIKey)
+	mux.HandleFunc("POST /api/merchants/{merchant_id}/api-keys/revoke", payoutHandler.RevokeMerchantAPIKey)
 	mux.HandleFunc("GET /api/v1/deposits/{order_no}", depositHandler.GetDeposit)
 	mux.HandleFunc("GET /api/v1/deposits/{order_no}/redirect", depositHandler.RedirectDeposit)
 	mux.HandleFunc("POST /api/v1/deposits/providers/{provider}/notifications", depositHandler.GenericDepositProviderNotify)

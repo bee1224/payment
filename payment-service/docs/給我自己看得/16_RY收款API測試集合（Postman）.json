@@ -1,14 +1,14 @@
 {
   "info": {
     "_postman_id": "6f2c7285-f2b4-4a38-9e11-payment-service-collection",
-    "name": "Payment Service API Collection",
+    "name": "RIG001 Gateway API Collection",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Postman collection for current payment-service routes: deposits, RY payout proxy, and workflow payouts."
+    "description": "Postman collection for current RIG001 Gateway routes: deposits, RY payout proxy, and workflow payouts."
   },
   "variable": [
-    { "key": "base_url", "value": "https://payment-service.0f2006wzt5v7m.ap-east-1.cs.amazonlightsail.com", "type": "string" },
-    { "key": "ry_sign_key", "value": "your_ry_sign_key", "type": "string" },
-    { "key": "pay_customer_id", "value": "M10001", "type": "string" },
+    { "key": "base_url", "value": "https://api.nnviopp.com", "type": "string" },
+    { "key": "gateway_sign_key", "value": "your_gateway_sign_key", "type": "string" },
+    { "key": "pay_customer_id", "value": "RIG001", "type": "string" },
     { "key": "pay_notify_url", "value": "https://merchant.example.com/callback", "type": "string" },
     { "key": "pay_channel_id", "value": "1000", "type": "string" },
     { "key": "pay_amount", "value": "1000", "type": "string" },
@@ -26,7 +26,7 @@
     { "key": "query_apply_date", "value": "", "type": "string" },
     { "key": "query_md5_sign", "value": "", "type": "string" },
     { "key": "transaction_id", "value": "", "type": "string" },
-    { "key": "merchant_id", "value": "M10001", "type": "string" },
+    { "key": "merchant_id", "value": "RIG001", "type": "string" },
     { "key": "merchant_api_key", "value": "merchant-secret", "type": "string" },
     { "key": "merchant_callback_url", "value": "https://merchant.example.com/payout-callback", "type": "string" },
     { "key": "merchant_payout_no", "value": "", "type": "string" },
@@ -82,10 +82,10 @@
       ]
     },
     {
-      "name": "收款 RY Contract",
+      "name": "?�款 RY Contract",
       "item": [
         {
-          "name": "收款-建立訂單 /api/pay_order",
+          "name": "?�款-建�?訂單 /api/pay_order",
           "event": [
             {
               "listen": "prerequest",
@@ -128,7 +128,7 @@
                   "  mobile: pm.collectionVariables.get('mobile'),",
                   "  id_no: pm.collectionVariables.get('id_no')",
                   "};",
-                  "pm.collectionVariables.set('pay_md5_sign', sign(fields, pm.collectionVariables.get('ry_sign_key')));"
+                  "pm.collectionVariables.set('pay_md5_sign', sign(fields, pm.collectionVariables.get('gateway_sign_key')));"
                 ]
               }
             },
@@ -168,7 +168,7 @@
           }
         },
         {
-          "name": "收款-查詢訂單 /api/query_transaction",
+          "name": "?�款-?�詢訂單 /api/query_transaction",
           "event": [
             {
               "listen": "prerequest",
@@ -192,7 +192,7 @@
                   "  pay_customer_id: pm.collectionVariables.get('pay_customer_id'),",
                   "  pay_apply_date: now,",
                   "  pay_order_id: orderIds",
-                  "}, pm.collectionVariables.get('ry_sign_key')));"
+                  "}, pm.collectionVariables.get('gateway_sign_key')));"
                 ]
               }
             },
@@ -238,10 +238,10 @@
       ]
     },
     {
-      "name": "RY 代付代理 /api/payments/*",
+      "name": "RY �??�?? /api/payments/*",
       "item": [
         {
-          "name": "代付代理-建立訂單 /api/payments/pay_order",
+          "name": "�??�??-建�?訂單 /api/payments/pay_order",
           "event": [
             {
               "listen": "prerequest",
@@ -279,7 +279,7 @@
                   "  pay_city: pm.collectionVariables.get('pay_city'),",
                   "  pay_validate_id: pm.collectionVariables.get('pay_validate_id'),",
                   "  pay_currency: pm.collectionVariables.get('payout_pay_currency')",
-                  "}, pm.collectionVariables.get('ry_sign_key')));"
+                  "}, pm.collectionVariables.get('gateway_sign_key')));"
                 ]
               }
             },
@@ -318,7 +318,7 @@
           }
         },
         {
-          "name": "代付代理-查詢訂單 /api/payments/query_transaction",
+          "name": "�??�??-?�詢訂單 /api/payments/query_transaction",
           "event": [
             {
               "listen": "prerequest",
@@ -338,7 +338,7 @@
                   "  pay_customer_id: pm.collectionVariables.get('pay_customer_id'),",
                   "  pay_apply_date: now,",
                   "  pay_order_id: orderIds",
-                  "}, pm.collectionVariables.get('ry_sign_key')));"
+                  "}, pm.collectionVariables.get('gateway_sign_key')));"
                 ]
               }
             },
@@ -375,7 +375,7 @@
           }
         },
         {
-          "name": "代付代理-餘額查詢 /api/payments/balance",
+          "name": "�??�??-餘�??�詢 /api/payments/balance",
           "event": [
             {
               "listen": "prerequest",
@@ -393,7 +393,7 @@
                   "pm.collectionVariables.set('ry_payout_balance_md5_sign', sign({",
                   "  pay_customer_id: pm.collectionVariables.get('pay_customer_id'),",
                   "  pay_apply_date: now",
-                  "}, pm.collectionVariables.get('ry_sign_key')));"
+                  "}, pm.collectionVariables.get('gateway_sign_key')));"
                 ]
               }
             },
@@ -426,7 +426,7 @@
           }
         },
         {
-          "name": "代付代理-回調模擬 /api/payments/callback",
+          "name": "�??�??-?�調模擬 /api/payments/callback",
           "event": [
             {
               "listen": "prerequest",
@@ -448,7 +448,7 @@
                   "  transaction_code: pm.collectionVariables.get('callback_transaction_code'),",
                   "  transaction_msg: pm.collectionVariables.get('callback_transaction_msg')",
                   "};",
-                  "pm.collectionVariables.set('callback_sign', sign(fields, pm.collectionVariables.get('ry_sign_key')));"
+                  "pm.collectionVariables.set('callback_sign', sign(fields, pm.collectionVariables.get('gateway_sign_key')));"
                 ]
               }
             },
@@ -481,16 +481,16 @@
               "host": ["{{base_url}}"],
               "path": ["api", "payments", "callback"]
             },
-            "description": "Simulate RY payout callback. order_id must match an existing merchant_payout_no."
+            "description": "Simulate gateway payout callback. order_id must match an existing merchant_payout_no."
           }
         }
       ]
     },
     {
-      "name": "正式提款流程 /api/payouts/*",
+      "name": "�???�款流�? /api/payouts/*",
       "item": [
         {
-          "name": "提款-建立申請 /api/payouts",
+          "name": "?�款-建�??��? /api/payouts",
           "event": [
             {
               "listen": "prerequest",
@@ -537,7 +537,7 @@
           }
         },
         {
-          "name": "提款-POST查詢 /api/payouts/query",
+          "name": "?�款-POST?�詢 /api/payouts/query",
           "event": [
             {
               "listen": "test",
@@ -573,7 +573,7 @@
           }
         },
         {
-          "name": "提款-GET查詢 /api/payouts/{payout_no}",
+          "name": "?�款-GET?�詢 /api/payouts/{payout_no}",
           "event": [
             {
               "listen": "test",
@@ -606,7 +606,7 @@
           }
         },
         {
-          "name": "提款-審核通過 /api/payouts/{payout_no}/approve",
+          "name": "?�款-審核?��? /api/payouts/{payout_no}/approve",
           "event": [
             {
               "listen": "test",
@@ -638,7 +638,7 @@
           }
         },
         {
-          "name": "提款-審核拒絕 /api/payouts/{payout_no}/reject",
+          "name": "?�款-審核?��? /api/payouts/{payout_no}/reject",
           "event": [
             {
               "listen": "test",
@@ -670,7 +670,7 @@
           }
         },
         {
-          "name": "提款-取消 /api/payouts/{payout_no}/cancel",
+          "name": "?�款-?��? /api/payouts/{payout_no}/cancel",
           "event": [
             {
               "listen": "test",

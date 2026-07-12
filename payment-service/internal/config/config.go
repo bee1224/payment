@@ -11,7 +11,7 @@ type Config struct {
 	App             AppConfig             `yaml:"app"`
 	Database        DatabaseConfig        `yaml:"database"`
 	NewebpayDeposit NewebpayDepositConfig `yaml:"newebpay"`
-	RY              RYConfig              `yaml:"ry"`
+	Gateway         GatewayConfig         `yaml:"gateway"`
 	Merchant        MerchantConfig        `yaml:"merchant"`
 }
 
@@ -35,7 +35,7 @@ type NewebpayDepositConfig struct {
 	ReturnURL  string `yaml:"return_url"`
 }
 
-type RYConfig struct {
+type GatewayConfig struct {
 	SignKey            string `yaml:"sign_key"`
 	MaxSkewSeconds     int    `yaml:"max_skew_seconds"`
 	BaseURL            string `yaml:"base_url"`
@@ -80,12 +80,12 @@ func applyEnv(cfg *Config) {
 	setString(&cfg.NewebpayDeposit.HashIV, "NEWEBPAY_HASH_IV")
 	setString(&cfg.NewebpayDeposit.NotifyURL, "NEWEBPAY_NOTIFY_URL")
 	setString(&cfg.NewebpayDeposit.ReturnURL, "NEWEBPAY_RETURN_URL")
-	setString(&cfg.RY.SignKey, "RY_SIGN_KEY")
-	setInt(&cfg.RY.MaxSkewSeconds, "RY_MAX_SKEW_SECONDS")
-	setString(&cfg.RY.BaseURL, "RY_BASE_URL")
-	setString(&cfg.RY.CustomerID, "RY_CUSTOMER_ID")
-	setString(&cfg.RY.PayoutNotifyURL, "RY_PAYOUT_NOTIFY_URL")
-	setInt(&cfg.RY.HTTPTimeoutSeconds, "RY_HTTP_TIMEOUT_SECONDS")
+	setStringFromKeys(&cfg.Gateway.SignKey, "GATEWAY_SIGN_KEY", "RY_SIGN_KEY")
+	setIntFromKeys(&cfg.Gateway.MaxSkewSeconds, "GATEWAY_MAX_SKEW_SECONDS", "RY_MAX_SKEW_SECONDS")
+	setStringFromKeys(&cfg.Gateway.BaseURL, "GATEWAY_BASE_URL", "RY_BASE_URL")
+	setStringFromKeys(&cfg.Gateway.CustomerID, "GATEWAY_CUSTOMER_ID", "RY_CUSTOMER_ID")
+	setStringFromKeys(&cfg.Gateway.PayoutNotifyURL, "GATEWAY_PAYOUT_NOTIFY_URL", "RY_PAYOUT_NOTIFY_URL")
+	setIntFromKeys(&cfg.Gateway.HTTPTimeoutSeconds, "GATEWAY_HTTP_TIMEOUT_SECONDS", "RY_HTTP_TIMEOUT_SECONDS")
 	setString(&cfg.Merchant.Code, "MERCHANT_CODE")
 	setString(&cfg.Merchant.Name, "MERCHANT_NAME")
 	setString(&cfg.Merchant.APIKey, "MERCHANT_API_KEY")
@@ -99,6 +99,15 @@ func setString(target *string, key string) {
 	}
 }
 
+func setStringFromKeys(target *string, keys ...string) {
+	for _, key := range keys {
+		if value := os.Getenv(key); value != "" {
+			*target = value
+			return
+		}
+	}
+}
+
 func setInt(target *int, key string) {
 	value := os.Getenv(key)
 	if value == "" {
@@ -107,6 +116,20 @@ func setInt(target *int, key string) {
 	parsed, err := strconv.Atoi(value)
 	if err == nil {
 		*target = parsed
+	}
+}
+
+func setIntFromKeys(target *int, keys ...string) {
+	for _, key := range keys {
+		value := os.Getenv(key)
+		if value == "" {
+			continue
+		}
+		parsed, err := strconv.Atoi(value)
+		if err == nil {
+			*target = parsed
+			return
+		}
 	}
 }
 

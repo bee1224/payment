@@ -1,4 +1,4 @@
-package ry
+package gateway
 
 import (
 	"bytes"
@@ -124,7 +124,7 @@ type UpstreamError struct {
 }
 
 func (e *UpstreamError) Error() string {
-	return fmt.Sprintf("RY payout upstream returned HTTP %d", e.StatusCode)
+	return fmt.Sprintf("gateway payout upstream returned HTTP %d", e.StatusCode)
 }
 
 func NewPayoutClient(baseURL, customerID, signKey, notifyURL string, timeout time.Duration) *PayoutClient {
@@ -218,7 +218,7 @@ func (c *PayoutClient) prepareCreateRequest(req *CreatePayoutRequest) error {
 		return errors.New("pay_bank_name must be a 3-digit bank code")
 	}
 	if !IsSupportedPayoutBankCode(req.PayBankName) {
-		return errors.New("pay_bank_name is not in RY supported bank code whitelist")
+		return errors.New("pay_bank_name is not in gateway supported bank code whitelist")
 	}
 	amount, err := strconv.ParseFloat(req.PayAmount, 64)
 	if err != nil || amount <= 0 {
@@ -271,14 +271,14 @@ func (c *PayoutClient) prepareBalanceRequest(req *BalanceRequest) error {
 
 func (c *PayoutClient) prepareCommon(customerID, applyDate *string) error {
 	if c.baseURL == "" {
-		return errors.New("RY base URL is not configured")
+		return errors.New("gateway base URL is not configured")
 	}
 	if c.signKey == "" {
-		return errors.New("RY sign key is not configured")
+		return errors.New("gateway sign key is not configured")
 	}
 	if c.customerID != "" {
 		if *customerID != "" && strings.TrimSpace(*customerID) != c.customerID {
-			return errors.New("pay_customer_id does not match configured RY customer")
+			return errors.New("pay_customer_id does not match configured gateway customer")
 		}
 		*customerID = c.customerID
 	}
@@ -303,7 +303,7 @@ func (c *PayoutClient) postJSON(ctx context.Context, path string, payload, resul
 	req.Header.Set("Content-Type", "application/json")
 	res, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("RY payout request failed; do not retry before querying provider state: %w", err)
+		return fmt.Errorf("gateway payout request failed; do not retry before querying provider state: %w", err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
@@ -311,7 +311,7 @@ func (c *PayoutClient) postJSON(ctx context.Context, path string, payload, resul
 		return &UpstreamError{StatusCode: res.StatusCode, Body: string(raw)}
 	}
 	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(result); err != nil {
-		return fmt.Errorf("decode RY payout response: %w", err)
+		return fmt.Errorf("decode gateway payout response: %w", err)
 	}
 	return nil
 }

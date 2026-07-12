@@ -3,8 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,17 +12,18 @@ import (
 	"time"
 
 	"payment-service/internal/domain"
-	providerRY "payment-service/internal/provider/ry"
+	providerGateway "payment-service/internal/provider/gateway"
 	"payment-service/internal/repository"
 )
 
 var ErrMerchantAuthFailed = errors.New("merchant authentication failed")
 
 type PayoutService struct {
-	store      repository.PayoutStore
-	client     *providerRY.PayoutClient
-	httpClient *http.Client
-	now        func() time.Time
+	store           repository.PayoutStore
+	client          *providerGateway.PayoutClient
+	httpClient      *http.Client
+	merchantSecrets map[string]string
+	now             func() time.Time
 }
 
 type CreatePayoutOrderRequest struct {
@@ -59,6 +58,27 @@ type CancelPayoutOrderRequest struct {
 	Reason string `json:"reason"`
 }
 
+type RotateMerchantAPIKeyRequest struct {
+	APIKey    string `json:"api_key"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+}
+
+type RevokeMerchantAPIKeyRequest struct {
+	APIKey string `json:"api_key"`
+}
+
+type MerchantAPIKeyView struct {
+	KeyHash       string     `json:"key_hash"`
+	Status        string     `json:"status"`
+	IsPrimary     bool       `json:"is_primary"`
+	LastUsedAt    *time.Time `json:"last_used_at,omitempty"`
+	LastRotatedAt time.Time  `json:"last_rotated_at"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	RevokedAt     *time.Time `json:"revoked_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
 type PayoutOrderView struct {
 	PayoutNo         string                   `json:"payout_no"`
 	MerchantID       string                   `json:"merchant_id"`
@@ -77,12 +97,26 @@ type PayoutOrderView struct {
 	UpdatedAt        time.Time                `json:"updated_at"`
 }
 
-func NewPayoutService(store repository.PayoutStore, client *providerRY.PayoutClient) *PayoutService {
+func NewPayoutService(store repository.PayoutStore, client *providerGateway.PayoutClient) *PayoutService {
+	return NewPayoutServiceWithSecrets(store, client, nil)
+}
+
+func NewPayoutServiceWithSecrets(store repository.PayoutStore, client *providerGateway.PayoutClient, merchantSecrets map[string]string) *PayoutService {
+	clonedSecrets := make(map[string]string, len(merchantSecrets))
+	for merchantCode, secret := range merchantSecrets {
+		merchantCode = strings.TrimSpace(merchantCode)
+		secret = strings.TrimSpace(secret)
+		if merchantCode == "" || secret == "" {
+			continue
+		}
+		clonedSecrets[merchantCode] = secret
+	}
 	return &PayoutService{
-		store:      store,
-		client:     client,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
-		now:        time.Now,
+		store:           store,
+		client:          client,
+		httpClient:      &http.Client{Timeout: 10 * time.Second},
+		merchantSecrets: clonedSecrets,
+		now:             time.Now,
 	}
 }
 
@@ -109,8 +143,8 @@ func (s *PayoutService) CreatePayoutOrder(ctx context.Context, req CreatePayoutO
 	if len(req.PayBankName) != 3 {
 		return domain.PayoutOrder{}, errors.New("pay_bank_name must be a 3-digit bank code")
 	}
-	if !providerRY.IsSupportedPayoutBankCode(req.PayBankName) {
-		return domain.PayoutOrder{}, errors.New("pay_bank_name is not in RY supported bank code whitelist")
+	if !providerGateway.IsSupportedPayoutBankCode(req.PayBankName) {
+		return domain.PayoutOrder{}, errors.New("pay_bank_name is not in gateway supported bank code whitelist")
 	}
 	callbackURL := strings.TrimSpace(req.CallbackURL)
 	if callbackURL == "" {
@@ -120,7 +154,7 @@ func (s *PayoutService) CreatePayoutOrder(ctx context.Context, req CreatePayoutO
 		MerchantCode:     merchant.Code,
 		PayoutNo:         buildPayoutNo(req.MerchantPayoutNo),
 		MerchantPayoutNo: strings.TrimSpace(req.MerchantPayoutNo),
-		Provider:         "ry",
+		Provider:         "gateway",
 		AmountCents:      amountCents,
 		FeeCents:         0,
 		TotalDebitCents:  amountCents,
@@ -189,9 +223,56 @@ func (s *PayoutService) CancelPayoutOrder(ctx context.Context, payoutNo, reason 
 	return s.store.CancelPayoutOrder(ctx, payoutNo, reason)
 }
 
-func (s *PayoutService) HandleRYCallback(ctx context.Context, req providerRY.PayoutCallbackRequest) (domain.PayoutOrder, bool, error) {
+func (s *PayoutService) ResendMerchantCallback(ctx context.Context, payoutNo string) (domain.PayoutOrder, error) {
+	order, err := s.store.FindPayoutOrderByPayoutNo(ctx, strings.TrimSpace(payoutNo))
+	if err != nil {
+		return domain.PayoutOrder{}, err
+	}
+	if !order.Status.IsTerminal() {
+		return domain.PayoutOrder{}, errors.New("payout must be terminal before callback resend")
+	}
+	if strings.TrimSpace(order.CallbackURL) == "" {
+		return domain.PayoutOrder{}, errors.New("callback_url is required for resend")
+	}
+	if err := s.enqueueMerchantCallback(ctx, order); err != nil {
+		return domain.PayoutOrder{}, err
+	}
+	return order, nil
+}
+
+func (s *PayoutService) ListMerchantAPIKeys(ctx context.Context, merchantCode string) ([]MerchantAPIKeyView, error) {
+	records, err := s.store.ListMerchantAPIKeys(ctx, strings.TrimSpace(merchantCode))
+	if err != nil {
+		return nil, err
+	}
+	return buildMerchantAPIKeyViews(records), nil
+}
+
+func (s *PayoutService) RotateMerchantAPIKey(ctx context.Context, merchantCode string, req RotateMerchantAPIKeyRequest) ([]MerchantAPIKeyView, error) {
+	expiresAt, err := parseOptionalRFC3339Time(req.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	records, err := s.store.RotateMerchantAPIKey(ctx, strings.TrimSpace(merchantCode), req.APIKey, expiresAt)
+	if err != nil {
+		return nil, err
+	}
+	s.setMerchantSigningSecret(merchantCode, req.APIKey)
+	return buildMerchantAPIKeyViews(records), nil
+}
+
+func (s *PayoutService) RevokeMerchantAPIKey(ctx context.Context, merchantCode string, req RevokeMerchantAPIKeyRequest) ([]MerchantAPIKeyView, error) {
+	records, err := s.store.RevokeMerchantAPIKey(ctx, strings.TrimSpace(merchantCode), req.APIKey)
+	if err != nil {
+		return nil, err
+	}
+	s.clearMerchantSigningSecretIfMatch(merchantCode, req.APIKey)
+	return buildMerchantAPIKeyViews(records), nil
+}
+
+func (s *PayoutService) HandleGatewayCallback(ctx context.Context, req providerGateway.PayoutCallbackRequest) (domain.PayoutOrder, bool, error) {
 	result := repository.PayoutProviderResult{
-		ProviderCode:     "ry",
+		ProviderCode:     "gateway",
 		MerchantPayoutNo: strings.TrimSpace(req.OrderID),
 		ProviderOrderNo:  strings.TrimSpace(req.TransactionID),
 		ProviderTradeNo:  strings.TrimSpace(req.TransactionID),
@@ -265,7 +346,7 @@ func (s *PayoutService) RetryMerchantCallbacks(ctx context.Context, limit int) e
 }
 
 func (s *PayoutService) dispatchApprovedPayout(ctx context.Context, order domain.PayoutOrder) (domain.PayoutOrder, error) {
-	requestPayload := providerRY.CreatePayoutRequest{
+	requestPayload := providerGateway.CreatePayoutRequest{
 		PayOrderID:       order.MerchantPayoutNo,
 		PayNotifyURL:     s.client.NotifyURL(),
 		PayAmount:        formatDecimal(order.AmountCents),
@@ -300,7 +381,7 @@ func (s *PayoutService) dispatchApprovedPayout(ctx context.Context, order domain
 }
 
 func (s *PayoutService) refreshPayoutStatus(ctx context.Context, order domain.PayoutOrder) (domain.PayoutOrder, error) {
-	result, err := s.client.QueryPayout(ctx, providerRY.QueryPayoutRequest{
+	result, err := s.client.QueryPayout(ctx, providerGateway.QueryPayoutRequest{
 		PayOrderID: []string{order.MerchantPayoutNo},
 	})
 	if err != nil {
@@ -320,7 +401,7 @@ func (s *PayoutService) refreshPayoutStatus(ctx context.Context, order domain.Pa
 		return order, nil
 	}
 	updated, changed, err := s.store.ApplyPayoutResult(ctx, repository.PayoutProviderResult{
-		ProviderCode:     "ry",
+		ProviderCode:     "gateway",
 		MerchantPayoutNo: order.MerchantPayoutNo,
 		ProviderOrderNo:  strings.TrimSpace(result.Data.PaymentID),
 		ProviderTradeNo:  strings.TrimSpace(result.Data.PaymentID),
@@ -359,8 +440,8 @@ func (s *PayoutService) enqueueMerchantCallback(ctx context.Context, order domai
 		"completed_at":       formatTimePointer(order.CompletedAt),
 		"sign":               "",
 	}
-	if strings.TrimSpace(merchant.APIKey) != "" {
-		sign, signErr := providerRY.Sign(map[string]any{
+	if secret := s.merchantSigningSecret(merchant); secret != "" {
+		sign, signErr := providerGateway.Sign(map[string]any{
 			"merchant_id":        merchant.Code,
 			"merchant_payout_no": order.MerchantPayoutNo,
 			"payout_no":          order.PayoutNo,
@@ -370,7 +451,7 @@ func (s *PayoutService) enqueueMerchantCallback(ctx context.Context, order domai
 			"fee":                formatDecimal(order.FeeCents),
 			"currency":           order.Currency,
 			"completed_at":       formatTimePointer(order.CompletedAt),
-		}, merchant.APIKey)
+		}, secret)
 		if signErr == nil {
 			payloadMap["sign"] = sign
 		}
@@ -404,18 +485,47 @@ func (s *PayoutService) authenticateMerchant(ctx context.Context, merchantCode, 
 	if strings.ToLower(merchant.Status) == "disabled" {
 		return domain.Merchant{}, ErrMerchantAuthFailed
 	}
-	secret := strings.TrimSpace(merchant.APIKey)
-	if secret == "" {
-		return domain.Merchant{}, ErrMerchantAuthFailed
+	valid, err := s.store.ValidateMerchantAPIKey(ctx, merchant.ID, apiKey)
+	if err != nil {
+		return domain.Merchant{}, err
 	}
-	if apiKey == secret {
-		return merchant, nil
-	}
-	sum := sha256.Sum256([]byte(apiKey))
-	if strings.EqualFold(secret, hex.EncodeToString(sum[:])) {
+	if valid {
 		return merchant, nil
 	}
 	return domain.Merchant{}, ErrMerchantAuthFailed
+}
+
+func (s *PayoutService) merchantSigningSecret(merchant domain.Merchant) string {
+	if secret := strings.TrimSpace(s.merchantSecrets[strings.TrimSpace(merchant.Code)]); secret != "" {
+		return secret
+	}
+	if repositoryLooksLikeStoredHash(merchant.APIKey) {
+		return ""
+	}
+	return strings.TrimSpace(merchant.APIKey)
+}
+
+func (s *PayoutService) setMerchantSigningSecret(merchantCode, apiKey string) {
+	merchantCode = strings.TrimSpace(merchantCode)
+	apiKey = strings.TrimSpace(apiKey)
+	if merchantCode == "" || apiKey == "" {
+		return
+	}
+	if s.merchantSecrets == nil {
+		s.merchantSecrets = make(map[string]string)
+	}
+	s.merchantSecrets[merchantCode] = apiKey
+}
+
+func (s *PayoutService) clearMerchantSigningSecretIfMatch(merchantCode, apiKey string) {
+	merchantCode = strings.TrimSpace(merchantCode)
+	apiKey = strings.TrimSpace(apiKey)
+	if merchantCode == "" || apiKey == "" || s.merchantSecrets == nil {
+		return
+	}
+	if strings.TrimSpace(s.merchantSecrets[merchantCode]) == apiKey {
+		delete(s.merchantSecrets, merchantCode)
+	}
 }
 
 func buildPayoutNo(merchantPayoutNo string) string {
@@ -506,6 +616,18 @@ func parseOptionalTime(value string, fallback time.Time) time.Time {
 	return parsed
 }
 
+func parseOptionalRFC3339Time(value string) (*time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return nil, errors.New("expires_at must be RFC3339 format")
+	}
+	return &parsed, nil
+}
+
 func nextRetryTime(retryCount int) time.Time {
 	delay := time.Duration(1<<minInt(retryCount, 5)) * time.Minute
 	return time.Now().Add(delay)
@@ -518,11 +640,28 @@ func minInt(a, b int) int {
 	return b
 }
 
-func responseTransactionID(result providerRY.CreatePayoutResponse) string {
+func responseTransactionID(result providerGateway.CreatePayoutResponse) string {
 	if result.Data == nil {
 		return ""
 	}
 	return strings.TrimSpace(result.Data.TransactionID)
+}
+
+func repositoryLooksLikeStoredHash(secret string) bool {
+	secret = strings.TrimSpace(secret)
+	if len(secret) != 64 {
+		return false
+	}
+	for _, r := range secret {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		case r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func mustJSON(value any) string {
@@ -533,7 +672,7 @@ func mustJSON(value any) string {
 	return string(raw)
 }
 
-func payoutEventKey(req providerRY.PayoutCallbackRequest) string {
+func payoutEventKey(req providerGateway.PayoutCallbackRequest) string {
 	return strings.Join([]string{
 		fmt.Sprintf("%v", req.CustomerID),
 		strings.TrimSpace(req.OrderID),
@@ -561,4 +700,22 @@ func BuildPayoutOrderView(order domain.PayoutOrder) PayoutOrderView {
 		CreatedAt:        order.CreatedAt,
 		UpdatedAt:        order.UpdatedAt,
 	}
+}
+
+func buildMerchantAPIKeyViews(records []repository.MerchantAPIKeyRecord) []MerchantAPIKeyView {
+	views := make([]MerchantAPIKeyView, 0, len(records))
+	for _, record := range records {
+		views = append(views, MerchantAPIKeyView{
+			KeyHash:       record.KeyHash,
+			Status:        record.Status,
+			IsPrimary:     record.IsPrimary,
+			LastUsedAt:    record.LastUsedAt,
+			LastRotatedAt: record.LastRotatedAt,
+			ExpiresAt:     record.ExpiresAt,
+			RevokedAt:     record.RevokedAt,
+			CreatedAt:     record.CreatedAt,
+			UpdatedAt:     record.UpdatedAt,
+		})
+	}
+	return views
 }

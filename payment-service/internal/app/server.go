@@ -9,8 +9,8 @@ import (
 	"payment-service/internal/config"
 	delivery "payment-service/internal/delivery/http"
 	"payment-service/internal/provider"
+	providerGateway "payment-service/internal/provider/gateway"
 	"payment-service/internal/provider/newebpay"
-	providerRY "payment-service/internal/provider/ry"
 	"payment-service/internal/repository"
 	"payment-service/internal/service"
 )
@@ -36,13 +36,13 @@ func (s *Server) Run() error {
 		"newebpay": newebpayDepositGateway,
 	}
 	depositChannelProviders := map[string]string{
-		"CREDIT":     "newebpay",
-		"APPLEPAY":   "newebpay",
-		"GOOGLEPAY":  "newebpay",
-		"WEBATM":     "newebpay",
-		"VACC":       "newebpay",
-		"CVS":        "newebpay",
-		"BARCODE":    "newebpay",
+		"CREDIT":    "newebpay",
+		"APPLEPAY":  "newebpay",
+		"GOOGLEPAY": "newebpay",
+		"WEBATM":    "newebpay",
+		"VACC":      "newebpay",
+		"CVS":       "newebpay",
+		"BARCODE":   "newebpay",
 	}
 	ledger := service.NewLedgerService()
 	depositService := service.NewDepositService(depositGateways, depositChannelProviders, ledger)
@@ -75,16 +75,20 @@ func (s *Server) Run() error {
 		)
 		payoutStore = repository.NewMySQLPayoutStore(sqlDB)
 	}
-	payoutClient := providerRY.NewPayoutClient(
-		s.cfg.RY.BaseURL,
-		s.cfg.RY.CustomerID,
-		s.cfg.RY.SignKey,
-		s.cfg.RY.PayoutNotifyURL,
-		time.Duration(s.cfg.RY.HTTPTimeoutSeconds)*time.Second,
+	payoutClient := providerGateway.NewPayoutClient(
+		s.cfg.Gateway.BaseURL,
+		s.cfg.Gateway.CustomerID,
+		s.cfg.Gateway.SignKey,
+		s.cfg.Gateway.PayoutNotifyURL,
+		time.Duration(s.cfg.Gateway.HTTPTimeoutSeconds)*time.Second,
 	)
-	payoutService := service.NewPayoutService(payoutStore, payoutClient)
+	merchantSecrets := map[string]string{}
+	if merchantBootstrap.Enabled() {
+		merchantSecrets[merchantBootstrap.Code] = merchantBootstrap.APIKey
+	}
+	payoutService := service.NewPayoutServiceWithSecrets(payoutStore, payoutClient, merchantSecrets)
 	go runPayoutLoops(payoutService)
-	router := delivery.NewRouter(depositService, payoutService, s.cfg.App, s.cfg.RY)
+	router := delivery.NewRouter(depositService, payoutService, s.cfg.App, s.cfg.Gateway)
 	addr := fmt.Sprintf(":%d", s.cfg.App.Port)
 	return http.ListenAndServe(addr, router)
 }

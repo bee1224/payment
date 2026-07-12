@@ -1,10 +1,9 @@
 services:
   mysql:
-    image: mysql:8.4
-    container_name: payment-mysql
+    image: mariadb:10.11
+    container_name: ${COMPOSE_PROJECT_NAME:-payment}-mysql
     restart: unless-stopped
     command:
-      - --default-authentication-plugin=mysql_native_password
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
     environment:
@@ -16,7 +15,7 @@ services:
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -28,7 +27,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: payment-api
+    container_name: ${COMPOSE_PROJECT_NAME:-payment}-api
     restart: unless-stopped
     depends_on:
       mysql:
@@ -44,6 +43,12 @@ services:
       NEWEBPAY_HASH_IV: ${NEWEBPAY_HASH_IV}
       NEWEBPAY_NOTIFY_URL: ${NEWEBPAY_NOTIFY_URL}
       NEWEBPAY_RETURN_URL: ${NEWEBPAY_RETURN_URL}
+      GATEWAY_BASE_URL: ${GATEWAY_BASE_URL}
+      GATEWAY_CUSTOMER_ID: ${GATEWAY_CUSTOMER_ID}
+      GATEWAY_SIGN_KEY: ${GATEWAY_SIGN_KEY}
+      GATEWAY_PAYOUT_NOTIFY_URL: ${GATEWAY_PAYOUT_NOTIFY_URL}
+      GATEWAY_MAX_SKEW_SECONDS: ${GATEWAY_MAX_SKEW_SECONDS}
+      GATEWAY_HTTP_TIMEOUT_SECONDS: ${GATEWAY_HTTP_TIMEOUT_SECONDS}
       RY_BASE_URL: ${RY_BASE_URL}
       RY_CUSTOMER_ID: ${RY_CUSTOMER_ID}
       RY_SIGN_KEY: ${RY_SIGN_KEY}
@@ -57,7 +62,7 @@ services:
       MERCHANT_INITIAL_BALANCE_TWD: ${MERCHANT_INITIAL_BALANCE_TWD}
       PAYOUT_REVIEW_TOKEN: ${PAYOUT_REVIEW_TOKEN}
     ports:
-      - "127.0.0.1:8080:8080"
+      - "${APP_BIND_HOST:-127.0.0.1}:${APP_HOST_PORT:-8080}:8080"
     networks:
       - payment-net
 

@@ -19,7 +19,11 @@ Internet
 - `compose.yaml`: runs `payment-api` and `mysql`
 - `deploy/nginx/payment.conf`: host Nginx reverse proxy template
 - `.env.example`: full production environment variable checklist
+- `.env.prod.example`: production env template for dual-stack deployment
+- `.env.test.example`: test env template for dual-stack deployment
 - `.env`: local server-only template, ignored by Git
+
+If you want to run production and test on the same VPS, also read `docs/dual-environment-namecheap-vps.md`.
 
 ## Confirmed Callback And Return Routes
 
@@ -27,7 +31,7 @@ The following routes are defined in `internal/delivery/http/router.go` and shoul
 
 - NewebPay `NotifyURL`: `/api/v1/deposits/providers/newebpay/notifications`
 - NewebPay `ReturnURL`: `/api/v1/deposits/payment-result`
-- RY payout callback: `/api/payments/callback`
+- gateway payout callback: `/api/payments/callback`
 
 Compatibility aliases still exist, but production should use the canonical routes above:
 
@@ -49,12 +53,12 @@ Fill the following values in `.env` on the server:
 - `NEWEBPAY_HASH_IV`
 - `NEWEBPAY_NOTIFY_URL`
 - `NEWEBPAY_RETURN_URL`
-- `RY_BASE_URL`
-- `RY_CUSTOMER_ID`
-- `RY_SIGN_KEY`
-- `RY_PAYOUT_NOTIFY_URL`
-- `RY_MAX_SKEW_SECONDS`
-- `RY_HTTP_TIMEOUT_SECONDS`
+- `GATEWAY_BASE_URL`
+- `GATEWAY_CUSTOMER_ID`
+- `GATEWAY_SIGN_KEY`
+- `GATEWAY_PAYOUT_NOTIFY_URL`
+- `GATEWAY_MAX_SKEW_SECONDS`
+- `GATEWAY_HTTP_TIMEOUT_SECONDS`
 - `MERCHANT_CODE`
 - `MERCHANT_NAME`
 - `MERCHANT_API_KEY`
@@ -103,7 +107,7 @@ Before DNS is ready, you can temporarily set `server_name` to the instance publi
 
 Point the production hostname to the Lightsail static IP:
 
-- `api.ri-you.com -> 18.162.105.240`
+- `api.nnviopp.com -> 18.162.105.240`
 
 Do not request Let's Encrypt certificates until the DNS record has propagated publicly.
 
@@ -113,7 +117,7 @@ After the domain resolves correctly:
 
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d api.ri-you.com
+sudo certbot --nginx -d api.nnviopp.com
 sudo systemctl status certbot.timer
 ```
 
@@ -125,11 +129,18 @@ After Certbot succeeds:
 
 ## Production Integration Values
 
-When the final domain is ready, use these URL patterns:
+Use the confirmed production integration values below:
 
-- `NEWEBPAY_NOTIFY_URL=https://api.ri-you.com/api/v1/deposits/providers/newebpay/notifications`
-- `NEWEBPAY_RETURN_URL=https://api.ri-you.com/api/v1/deposits/payment-result`
-- `RY_PAYOUT_NOTIFY_URL=https://api.ri-you.com/api/payments/callback`
+- `NEWEBPAY_NOTIFY_URL=https://api.nnviopp.com/api/v1/deposits/providers/newebpay/notifications`
+- `NEWEBPAY_RETURN_URL=https://api.nnviopp.com/api/v1/deposits/payment-result`
+- `GATEWAY_BASE_URL=https://api.nnviopp.com`
+- `GATEWAY_CUSTOMER_ID=RIG001`
+- `GATEWAY_SIGN_KEY=23ebf933a239994547bcafbca6c7fb0ed8a2b041dded453885d8c40788347725`
+- `GATEWAY_PAYOUT_NOTIFY_URL=https://api.nnviopp.com/api/payments/callback`
+- `GATEWAY_MAX_SKEW_SECONDS=300`
+- `GATEWAY_HTTP_TIMEOUT_SECONDS=15`
+- `MERCHANT_CODE=RIG001`
+- `MERCHANT_NAME=NewebPay`
 
 `MERCHANT_CALLBACK_URL` is not an inbound route in this service. It is the merchant system URL that this service will call back to.
 
@@ -137,8 +148,8 @@ When the final domain is ready, use these URL patterns:
 
 ```bash
 curl -i http://127.0.0.1:8080/health
-curl -I http://api.ri-you.com/health
-curl -I https://api.ri-you.com/health
+curl -I http://api.nnviopp.com/health
+curl -I https://api.nnviopp.com/health
 docker compose ps
 docker compose logs --tail=100 payment-api
 docker compose logs --tail=100 mysql
@@ -166,10 +177,5 @@ Expected results:
 
 These values are still pending and block final go-live:
 
-- Production domain name: `api.ri-you.com`
-- Final DNS A record
-- `RY_BASE_URL`
-- `RY_CUSTOMER_ID`
-- `RY_SIGN_KEY`
 - Final merchant callback URL and merchant API key
 - Final NewebPay production callback secrets and merchant-side webhook URL

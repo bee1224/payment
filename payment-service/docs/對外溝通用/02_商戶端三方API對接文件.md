@@ -1,9 +1,30 @@
-# 商戶端三方 API 對接文件
+# 商戶端代收 API 對接文件
 
-> 最後更新：2026-07-09
-> 本文件以目前 `payment-service` 線上實作為準。若與舊版 RY 文件不同，以本文件為準。
+> 文件版本：2026-07-11  
+> 適用範圍：商戶端代收接口對接
 
-目前代收只支援以下 7 種收款方式：
+本文件說明商戶如何串接 `RIG001 Gateway` 之代收能力。本文件內容即為正式對接依據。
+
+## 主要接口一覽
+
+為利合作方技術人員快速閱讀與對照，代收相關主要接口整理如下：
+
+| 功能 | 方法 | 路徑 | 說明 |
+|---|---|---|---|
+| 建立收款訂單 | `POST` | `/api/pay_order` | 建立代收訂單並取得付款導頁資訊 |
+| 查詢收款訂單 | `POST` | `/api/query_transaction` | 查詢商戶訂單目前狀態 |
+| 商戶結果通知 | `POST` | 商戶自填 `pay_notify_url` | 我方於訂單狀態更新後主動回調商戶 |
+
+如需正式網址，請使用以下網域組合：
+
+- `POST https://api.nnviopp.com/api/pay_order`
+- `POST https://api.nnviopp.com/api/query_transaction`
+
+商戶回調網址 `pay_notify_url` 由商戶端提供，我方將於代收狀態變更後主動發送通知。
+
+## 1. 支援之代收方式
+
+目前支援以下 7 種收款方式：
 
 | `pay_channel_id` | 說明 |
 |---|---|
@@ -15,16 +36,16 @@
 | `1007` | 超商代碼 |
 | `1008` | 超商條碼 |
 
-## 路由對照
+## 2. 路由說明
 
-| 最新路由 | 相容路由 |
+| 功能 | 路由 |
 |---|---|
-| `POST /api/pay_order` | `POST /api/v1/deposits` |
-| `POST /api/query_transaction` | `POST /api/v1/deposits/query` |
+| 建立收款訂單 | `POST /api/pay_order` |
+| 查詢收款訂單 | `POST /api/query_transaction` |
 
-相容路由仍可使用，但會回傳 `Deprecation: true` header。
+請合作方以本文件列示之路由作為正式對接路徑。
 
-## 1. 建立收款訂單
+## 3. 建立收款訂單
 
 ### Endpoint
 
@@ -37,11 +58,11 @@
 | `pay_customer_id` | string | Y | 商戶編號 |
 | `pay_apply_date` | string | Y | Unix timestamp |
 | `pay_order_id` | string | Y | 商戶訂單號 |
-| `pay_notify_url` | string | Y | 商戶 callback URL |
+| `pay_notify_url` | string | Y | 商戶回調網址 |
 | `pay_amount` | string / number | Y | 正整數 TWD 金額 |
 | `pay_channel_id` | string | Y | 收款方式編碼 |
-| `bank_account` | array[string] | N | 特定情境可帶入 |
-| `store_number` | array[string] | N | 特定情境可帶入 |
+| `bank_account` | array[string] | N | 特定情境可傳入之帳號資訊 |
+| `store_number` | array[string] | N | 特定情境可傳入之門市資訊 |
 | `pay_product_name` | string | N | 商品名稱 |
 | `user_name` | string | N | 付款人姓名 |
 | `bank_id` | string | N | 補充資訊 |
@@ -54,7 +75,7 @@
 
 ```json
 {
-  "pay_customer_id": "M10001",
+  "pay_customer_id": "RIG001",
   "pay_apply_date": "1783555200",
   "pay_order_id": "ORDER202607090001",
   "pay_notify_url": "https://merchant.example.com/callback",
@@ -82,7 +103,7 @@
   "data": {
     "order_id": "ORDER202607090001",
     "transaction_id": "PORDER202607090001123456",
-    "view_url": "https://payment-service.example.com/api/v1/deposits/PORDER202607090001123456/redirect",
+    "view_url": "https://api.nnviopp.com/api/v1/deposits/PORDER202607090001123456/redirect",
     "user_name": "Marry Huston",
     "bill_price": "1000.00000000",
     "real_price": "1000.00000000",
@@ -97,11 +118,11 @@
 
 ### 回應說明
 
-- `view_url` 為商戶應導向的付款頁入口。
+- `view_url` 為付款頁面入口，商戶應引導使用者前往該網址完成付款。
 - `real_price` 目前與 `bill_price` 相同。
-- 以下欄位目前不會由系統回傳：`qr_url`、`expired`、`alipay_qrcode`、`rate`。
+- 以下欄位目前不由系統回傳：`qr_url`、`expired`、`alipay_qrcode`、`rate`。
 
-## 2. 查詢訂單
+## 4. 查詢訂單
 
 ### Endpoint
 
@@ -120,7 +141,7 @@
 
 ```json
 {
-  "pay_customer_id": "M10001",
+  "pay_customer_id": "RIG001",
   "pay_apply_date": "1783555200",
   "pay_order_id": [
     "ORDER202607090001"
@@ -137,7 +158,7 @@
   "message": "success",
   "data": [
     {
-      "customer_id": "M10001",
+      "customer_id": "RIG001",
       "order_id": "ORDER202607090001",
       "transaction_id": "PORDER202607090001123456",
       "status": 0,
@@ -155,7 +176,7 @@
         "display_price": null
       },
       "pay_channel_id": "1000",
-      "view_url": "https://payment-service.example.com/api/v1/deposits/PORDER202607090001123456/redirect"
+      "view_url": "https://api.nnviopp.com/api/v1/deposits/PORDER202607090001123456/redirect"
     }
   ]
 }
@@ -169,33 +190,33 @@
 | `2` | 已付款 |
 | `5` | 付款失敗 |
 
-## 3. 商戶 callback
+## 5. 商戶回調通知
 
-當 provider 入帳通知成功後，`payment-service` 會將整理過的結果 POST 到商戶提供的 `pay_notify_url`。
+當上游支付通知完成且系統確認狀態後，`RIG001 Gateway` 會主動將整理後的結果 POST 至商戶提供之 `pay_notify_url`。
 
-商戶端需回應：
+商戶端收到通知後，請回應：
 
 ```text
 OK
 ```
 
-### callback payload
+### 回調欄位
 
 | 欄位 | 型別 | 必填 | 說明 |
 |---|---|---|---|
 | `customer_id` | string | Y | 商戶編號 |
 | `order_id` | string | Y | 商戶訂單號 |
-| `transaction_id` | string | Y | 系統訂單號 |
+| `transaction_id` | string | Y | 系統交易號 |
 | `order_amount` | number | Y | 訂單金額 |
 | `real_amount` | number | Y | 實際付款金額 |
-| `sign` | string | Y | callback 簽名 |
+| `sign` | string | Y | 回調簽名 |
 | `status` | string | Y | 訂單狀態 |
 | `message` | string | Y | 狀態說明 |
-| `payer_info` | string | N | 銀行帳號或繳費代碼 |
+| `payer_info` | string | N | 銀行帳號或繳費資訊 |
 | `extra.user_name` | string | N | 付款人姓名 |
 | `extra.pay_product_name` | string | N | 商品名稱 |
 
-### callback 狀態
+### 回調狀態碼
 
 | `status` | 說明 |
 |---|---|

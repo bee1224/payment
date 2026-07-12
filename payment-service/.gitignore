@@ -5,3 +5,4 @@ config/config.yaml
 api.exe
 bin/
 .deploy-tmp/
+docs/給我自己看得/19_客戶資料_*.md

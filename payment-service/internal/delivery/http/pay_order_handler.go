@@ -105,12 +105,12 @@ type QueryTransactionRCFeedback struct {
 	DisplayPrice any `json:"display_price"`
 }
 
-type RYSecurityConfig struct {
+type GatewaySecurityConfig struct {
 	SignKey        string
 	MaxSkewSeconds int
 }
 
-var ryDepositChannelIDToCode = map[string]string{
+var gatewayDepositChannelIDToCode = map[string]string{
 	"1000": "CREDIT",
 	"1001": "APPLEPAY",
 	"1002": "GOOGLEPAY",
@@ -120,14 +120,14 @@ var ryDepositChannelIDToCode = map[string]string{
 	"1008": "BARCODE",
 }
 
-var ryDepositChannelCodeToID = map[string]string{
-	"CREDIT":     "1000",
-	"APPLEPAY":   "1001",
-	"GOOGLEPAY":  "1002",
-	"WEBATM":     "1005",
-	"VACC":       "1006",
-	"CVS":        "1007",
-	"BARCODE":    "1008",
+var gatewayDepositChannelCodeToID = map[string]string{
+	"CREDIT":    "1000",
+	"APPLEPAY":  "1001",
+	"GOOGLEPAY": "1002",
+	"WEBATM":    "1005",
+	"VACC":      "1006",
+	"CVS":       "1007",
+	"BARCODE":   "1008",
 }
 
 func (h *DepositHandler) CreatePayOrder(w nethttp.ResponseWriter, r *nethttp.Request) {
@@ -137,21 +137,21 @@ func (h *DepositHandler) CreatePayOrder(w nethttp.ResponseWriter, r *nethttp.Req
 		return
 	}
 
-	amount, err := parseRYAmount(req.PayAmount)
+	amount, err := parseGatewayAmount(req.PayAmount)
 	if err != nil {
 		writePayOrderError(w, nethttp.StatusBadRequest, "INVALID_AMOUNT", err.Error(), "pay_amount", "")
 		return
 	}
-	if err := h.verifyRYApplyDate(req.PayApplyDate); err != nil {
+	if err := h.verifyGatewayApplyDate(req.PayApplyDate); err != nil {
 		writePayOrderError(w, nethttp.StatusBadRequest, "INVALID_APPLY_DATE", err.Error(), "pay_apply_date", "")
 		return
 	}
-	if err := h.verifyRYSignature(req.payOrderSignFields(), req.PayMD5Sign); err != nil {
+	if err := h.verifyGatewaySignature(req.payOrderSignFields(), req.PayMD5Sign); err != nil {
 		writePayOrderError(w, nethttp.StatusBadRequest, "INVALID_SIGN", err.Error(), "pay_md5_sign", "")
 		return
 	}
 
-	channelCode, err := mapRYDepositChannelIDToCode(strings.TrimSpace(req.PayChannelID))
+	channelCode, err := mapGatewayDepositChannelIDToCode(strings.TrimSpace(req.PayChannelID))
 	if err != nil {
 		writePayOrderError(w, nethttp.StatusBadRequest, "INVALID_CHANNEL", err.Error(), "pay_channel_id", "")
 		return
@@ -196,12 +196,12 @@ func (h *DepositHandler) CreatePayOrder(w nethttp.ResponseWriter, r *nethttp.Req
 			TransactionID: result.Order.OrderNo,
 			ViewURL:       buildAbsoluteURL(r, fmt.Sprintf("/api/v1/deposits/%s/redirect", result.Order.OrderNo)),
 			UserName:      result.Order.UserName,
-			BillPrice:     formatRYAmount(result.Order.AmountCents),
-			RealPrice:     formatRYAmount(result.Order.AmountCents),
-			Remark:        buildRYDepositRemark(result.Order),
+			BillPrice:     formatGatewayAmount(result.Order.AmountCents),
+			RealPrice:     formatGatewayAmount(result.Order.AmountCents),
+			Remark:        buildGatewayDepositRemark(result.Order),
 			BankNo:        firstNonEmpty(result.Order.BankAccounts),
-			BankName:      buildRYDepositBankName(result.Order),
-			BankFrom:      buildRYDepositBankFrom(result.Order),
+			BankName:      buildGatewayDepositBankName(result.Order),
+			BankFrom:      buildGatewayDepositBankFrom(result.Order),
 			BankOwner:     result.Order.UserName,
 		},
 	})
@@ -216,7 +216,7 @@ func (h *DepositHandler) QueryTransaction(w nethttp.ResponseWriter, r *nethttp.R
 
 	req.PayCustomerID = strings.TrimSpace(req.PayCustomerID)
 	req.PayApplyDate = strings.TrimSpace(req.PayApplyDate)
-	orderIDs, err := parseRYOrderIDs(req.PayOrderID)
+	orderIDs, err := parseGatewayOrderIDs(req.PayOrderID)
 	if err != nil {
 		writeQueryTransactionError(w, nethttp.StatusBadRequest, 1004, err.Error(), "pay_order_id", "")
 		return
@@ -225,7 +225,7 @@ func (h *DepositHandler) QueryTransaction(w nethttp.ResponseWriter, r *nethttp.R
 		writeQueryTransactionError(w, nethttp.StatusBadRequest, 1001, "pay_customer_id is required", "pay_customer_id", "")
 		return
 	}
-	if err := h.verifyRYApplyDate(req.PayApplyDate); err != nil {
+	if err := h.verifyGatewayApplyDate(req.PayApplyDate); err != nil {
 		writeQueryTransactionError(w, nethttp.StatusBadRequest, 1002, err.Error(), "pay_apply_date", "")
 		return
 	}
@@ -233,7 +233,7 @@ func (h *DepositHandler) QueryTransaction(w nethttp.ResponseWriter, r *nethttp.R
 		writeQueryTransactionError(w, nethttp.StatusBadRequest, 1004, "pay_order_id is required", "pay_order_id", "")
 		return
 	}
-	if err := h.verifyRYSignature(req.queryTransactionSignFields(), req.PayMD5Sign); err != nil {
+	if err := h.verifyGatewaySignature(req.queryTransactionSignFields(), req.PayMD5Sign); err != nil {
 		writeQueryTransactionError(w, nethttp.StatusBadRequest, 1003, err.Error(), "pay_md5_sign", "")
 		return
 	}
@@ -248,9 +248,9 @@ func (h *DepositHandler) QueryTransaction(w nethttp.ResponseWriter, r *nethttp.R
 			CustomerID:       order.MerchantCode,
 			OrderID:          order.MerchantOrderNo,
 			TransactionID:    order.OrderNo,
-			Status:           mapRYDepositQueryStatus(string(order.Status)),
-			OrderAmount:      formatRYAmount(order.AmountCents),
-			RealAmount:       formatRYAmount(order.AmountCents),
+			Status:           mapGatewayDepositQueryStatus(string(order.Status)),
+			OrderAmount:      formatGatewayAmount(order.AmountCents),
+			RealAmount:       formatGatewayAmount(order.AmountCents),
 			Created:          order.CreatedAt.Format("2006-01-02 15:04:05"),
 			Expired:          "",
 			NotifyURL:        order.CallbackURL,
@@ -263,7 +263,7 @@ func (h *DepositHandler) QueryTransaction(w nethttp.ResponseWriter, r *nethttp.R
 				Rate:         nil,
 				DisplayPrice: nil,
 			},
-			PayChannelID: mapRYDepositChannelCodeToID(order.ChannelCode),
+			PayChannelID: mapGatewayDepositChannelCodeToID(order.ChannelCode),
 			ViewURL:      buildAbsoluteURL(r, fmt.Sprintf("/api/v1/deposits/%s/redirect", order.OrderNo)),
 		})
 	}
@@ -275,7 +275,7 @@ func (h *DepositHandler) QueryTransaction(w nethttp.ResponseWriter, r *nethttp.R
 	})
 }
 
-func parseRYAmount(value any) (int64, error) {
+func parseGatewayAmount(value any) (int64, error) {
 	switch v := value.(type) {
 	case float64:
 		if v <= 0 {
@@ -318,7 +318,7 @@ func buildAbsoluteURL(r *nethttp.Request, path string) string {
 
 func writePayOrderError(w nethttp.ResponseWriter, status int, code, message, field, details string) {
 	response.JSON(w, status, PayOrderResponse{
-		Code:    mapRYDepositErrorCode(code),
+		Code:    mapGatewayDepositErrorCode(code),
 		Message: message,
 		Error: &PayOrderError{
 			Field:   field,
@@ -338,7 +338,7 @@ func writeQueryTransactionError(w nethttp.ResponseWriter, status int, code int, 
 	})
 }
 
-func mapRYDepositStatus(status string) string {
+func mapGatewayDepositStatus(status string) string {
 	switch status {
 	case "paid":
 		return "30000"
@@ -349,7 +349,7 @@ func mapRYDepositStatus(status string) string {
 	}
 }
 
-func mapRYDepositQueryStatus(status string) int {
+func mapGatewayDepositQueryStatus(status string) int {
 	switch status {
 	case "paid":
 		return 2
@@ -360,16 +360,16 @@ func mapRYDepositQueryStatus(status string) int {
 	}
 }
 
-func mapRYDepositChannelIDToCode(channelID string) (string, error) {
-	channelCode, ok := ryDepositChannelIDToCode[channelID]
+func mapGatewayDepositChannelIDToCode(channelID string) (string, error) {
+	channelCode, ok := gatewayDepositChannelIDToCode[channelID]
 	if !ok {
 		return "", fmt.Errorf("unsupported pay_channel_id: %s", channelID)
 	}
 	return channelCode, nil
 }
 
-func mapRYDepositChannelCodeToID(channelCode string) string {
-	if channelID, ok := ryDepositChannelCodeToID[channelCode]; ok {
+func mapGatewayDepositChannelCodeToID(channelCode string) string {
+	if channelID, ok := gatewayDepositChannelCodeToID[channelCode]; ok {
 		return channelID
 	}
 	return channelCode
@@ -381,7 +381,7 @@ func (r PayOrderRequest) payOrderSignFields() map[string]any {
 		"pay_apply_date":   strings.TrimSpace(r.PayApplyDate),
 		"pay_order_id":     strings.TrimSpace(r.PayOrderID),
 		"pay_notify_url":   strings.TrimSpace(r.PayNotifyURL),
-		"pay_amount":       normalizeRYSignValue(r.PayAmount),
+		"pay_amount":       normalizeGatewaySignValue(r.PayAmount),
 		"pay_channel_id":   strings.TrimSpace(r.PayChannelID),
 		"bank_account":     r.BankAccount,
 		"store_number":     r.StoreNumber,
@@ -398,11 +398,11 @@ func (r QueryTransactionRequest) queryTransactionSignFields() map[string]any {
 	return map[string]any{
 		"pay_customer_id": strings.TrimSpace(r.PayCustomerID),
 		"pay_apply_date":  strings.TrimSpace(r.PayApplyDate),
-		"pay_order_id":    normalizeRYOrderIDValue(r.PayOrderID),
+		"pay_order_id":    normalizeGatewayOrderIDValue(r.PayOrderID),
 	}
 }
 
-func (h *DepositHandler) verifyRYApplyDate(applyDate string) error {
+func (h *DepositHandler) verifyGatewayApplyDate(applyDate string) error {
 	applyDate = strings.TrimSpace(applyDate)
 	if applyDate == "" {
 		return fmt.Errorf("pay_apply_date is required")
@@ -411,7 +411,7 @@ func (h *DepositHandler) verifyRYApplyDate(applyDate string) error {
 	if err != nil {
 		return fmt.Errorf("pay_apply_date must be a valid unix timestamp")
 	}
-	maxSkew := h.ry.MaxSkewSeconds
+	maxSkew := h.gateway.MaxSkewSeconds
 	if maxSkew <= 0 {
 		maxSkew = 300
 	}
@@ -426,15 +426,15 @@ func (h *DepositHandler) verifyRYApplyDate(applyDate string) error {
 	return nil
 }
 
-func (h *DepositHandler) verifyRYSignature(fields map[string]any, provided string) error {
+func (h *DepositHandler) verifyGatewaySignature(fields map[string]any, provided string) error {
 	provided = strings.ToUpper(strings.TrimSpace(provided))
 	if provided == "" {
 		return fmt.Errorf("pay_md5_sign is required")
 	}
-	if strings.TrimSpace(h.ry.SignKey) == "" {
-		return fmt.Errorf("ry sign key is not configured")
+	if strings.TrimSpace(h.gateway.SignKey) == "" {
+		return fmt.Errorf("gateway sign key is not configured")
 	}
-	expected, err := buildRYMD5Signature(fields, h.ry.SignKey)
+	expected, err := buildGatewayMD5Signature(fields, h.gateway.SignKey)
 	if err != nil {
 		return err
 	}
@@ -444,10 +444,10 @@ func (h *DepositHandler) verifyRYSignature(fields map[string]any, provided strin
 	return nil
 }
 
-func buildRYMD5Signature(fields map[string]any, signKey string) (string, error) {
+func buildGatewayMD5Signature(fields map[string]any, signKey string) (string, error) {
 	keys := make([]string, 0, len(fields))
 	for key, value := range fields {
-		if isRYEmptyValue(value) {
+		if isGatewayEmptyValue(value) {
 			continue
 		}
 		keys = append(keys, key)
@@ -456,7 +456,7 @@ func buildRYMD5Signature(fields map[string]any, signKey string) (string, error) 
 
 	var parts []string
 	for _, key := range keys {
-		value, err := renderRYSignValue(fields[key])
+		value, err := renderGatewaySignValue(fields[key])
 		if err != nil {
 			return "", err
 		}
@@ -467,7 +467,7 @@ func buildRYMD5Signature(fields map[string]any, signKey string) (string, error) 
 	return strings.ToUpper(fmt.Sprintf("%x", sum)), nil
 }
 
-func renderRYSignValue(value any) (string, error) {
+func renderGatewaySignValue(value any) (string, error) {
 	switch v := value.(type) {
 	case string:
 		return strings.TrimSpace(v), nil
@@ -482,7 +482,7 @@ func renderRYSignValue(value any) (string, error) {
 	}
 }
 
-func isRYEmptyValue(value any) bool {
+func isGatewayEmptyValue(value any) bool {
 	switch v := value.(type) {
 	case nil:
 		return true
@@ -495,7 +495,7 @@ func isRYEmptyValue(value any) bool {
 	}
 }
 
-func normalizeRYSignValue(value any) string {
+func normalizeGatewaySignValue(value any) string {
 	switch v := value.(type) {
 	case string:
 		return strings.TrimSpace(v)
@@ -504,7 +504,7 @@ func normalizeRYSignValue(value any) string {
 	}
 }
 
-func normalizeRYOrderIDValue(value any) any {
+func normalizeGatewayOrderIDValue(value any) any {
 	switch v := value.(type) {
 	case string:
 		return strings.TrimSpace(v)
@@ -521,7 +521,7 @@ func normalizeRYOrderIDValue(value any) any {
 	}
 }
 
-func parseRYOrderIDs(value any) ([]string, error) {
+func parseGatewayOrderIDs(value any) ([]string, error) {
 	switch v := value.(type) {
 	case string:
 		id := strings.TrimSpace(v)
@@ -552,7 +552,7 @@ func parseRYOrderIDs(value any) ([]string, error) {
 	}
 }
 
-func formatRYAmount(amountCents int64) string {
+func formatGatewayAmount(amountCents int64) string {
 	return fmt.Sprintf("%.8f", float64(amountCents)/100)
 }
 
@@ -565,7 +565,7 @@ func firstNonEmpty(values []string) string {
 	return ""
 }
 
-func buildRYDepositRemark(order domain.DepositOrder) string {
+func buildGatewayDepositRemark(order domain.DepositOrder) string {
 	parts := make([]string, 0, 2)
 	if payCurrency := strings.TrimSpace(order.PayCurrency); payCurrency != "" {
 		parts = append(parts, fmt.Sprintf("pay_currency=%s", payCurrency))
@@ -576,7 +576,7 @@ func buildRYDepositRemark(order domain.DepositOrder) string {
 	return strings.Join(parts, "; ")
 }
 
-func buildRYDepositBankName(order domain.DepositOrder) string {
+func buildGatewayDepositBankName(order domain.DepositOrder) string {
 	switch {
 	case len(order.BankAccounts) > 0:
 		return "Bank Transfer"
@@ -589,11 +589,11 @@ func buildRYDepositBankName(order domain.DepositOrder) string {
 	}
 }
 
-func buildRYDepositBankFrom(order domain.DepositOrder) string {
+func buildGatewayDepositBankFrom(order domain.DepositOrder) string {
 	return strings.TrimSpace(order.BankID)
 }
 
-func mapRYDepositErrorCode(code string) int {
+func mapGatewayDepositErrorCode(code string) int {
 	switch code {
 	case "INVALID_JSON":
 		return 1000
@@ -612,13 +612,13 @@ func mapRYDepositErrorCode(code string) int {
 	}
 }
 
-func (h *DepositHandler) deliverRYDepositCallback(order domain.DepositOrder) error {
+func (h *DepositHandler) deliverGatewayDepositCallback(order domain.DepositOrder) error {
 	callbackURL := strings.TrimSpace(order.CallbackURL)
 	if callbackURL == "" {
 		return nil
 	}
 
-	status, message := mapRYDepositCallbackStatus(string(order.Status))
+	status, message := mapGatewayDepositCallbackStatus(string(order.Status))
 	payerInfo := firstNonEmpty(append(append([]string(nil), order.BankAccounts...), order.StoreNumbers...))
 	payload := map[string]any{
 		"customer_id":    order.MerchantCode,
@@ -645,8 +645,8 @@ func (h *DepositHandler) deliverRYDepositCallback(order domain.DepositOrder) err
 		"message":        message,
 		"payer_info":     payerInfo,
 	}
-	if strings.TrimSpace(h.ry.SignKey) != "" {
-		sign, err := buildRYMD5Signature(signFields, h.ry.SignKey)
+	if strings.TrimSpace(h.gateway.SignKey) != "" {
+		sign, err := buildGatewayMD5Signature(signFields, h.gateway.SignKey)
 		if err != nil {
 			return err
 		}
@@ -673,13 +673,13 @@ func (h *DepositHandler) deliverRYDepositCallback(order domain.DepositOrder) err
 	return nil
 }
 
-func mapRYDepositCallbackStatus(status string) (string, string) {
+func mapGatewayDepositCallbackStatus(status string) (string, string) {
 	switch status {
 	case "paid":
-		return "30000", "支付成功"
+		return "30000", "paid"
 	case "failed":
-		return "50000", "訂單失敗並沖正"
+		return "50000", "failed"
 	default:
-		return "10000", "訂單處理中"
+		return "10000", "processing"
 	}
 }
