@@ -113,6 +113,7 @@ type MerchantPayoutCallbackTask struct {
 	RetryCount    int
 	NextRetryAt   time.Time
 	LastError     string
+	ClaimToken    string
 	SentAt        *time.Time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time

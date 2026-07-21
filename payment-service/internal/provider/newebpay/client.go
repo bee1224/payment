@@ -61,11 +61,13 @@ func (c *DepositClient) VerifyDepositNotification(fields map[string]string) (pro
 	if tradeInfo == "" {
 		return provider.DepositNotification{}, fmt.Errorf("missing TradeInfo")
 	}
-	if tradeSha := fields["TradeSha"]; tradeSha != "" {
-		expected := GenerateDepositTradeSHA(tradeInfo, c.HashKey, c.HashIV)
-		if !strings.EqualFold(tradeSha, expected) {
-			return provider.DepositNotification{}, fmt.Errorf("invalid TradeSha")
-		}
+	tradeSha := strings.TrimSpace(fields["TradeSha"])
+	if tradeSha == "" {
+		return provider.DepositNotification{}, fmt.Errorf("missing TradeSha")
+	}
+	expected := GenerateDepositTradeSHA(tradeInfo, c.HashKey, c.HashIV)
+	if !strings.EqualFold(tradeSha, expected) {
+		return provider.DepositNotification{}, fmt.Errorf("invalid TradeSha")
 	}
 
 	plain, paddingMode, err := decryptTradeInfo(tradeInfo, c.HashKey, c.HashIV)
@@ -87,6 +89,36 @@ func (c *DepositClient) VerifyDepositNotification(fields map[string]string) (pro
 		Status:      parsed.Status,
 		RawPayload:  []byte(plain),
 	}, nil
+}
+
+func (c *DepositClient) EnrichDepositNotifyTrace(fields map[string]string, trace domain.DepositNotifyTrace) domain.DepositNotifyTrace {
+	if strings.TrimSpace(trace.ProviderOrderNo) != "" && strings.TrimSpace(trace.ProviderTradeNo) != "" {
+		return trace
+	}
+
+	tradeInfo := strings.TrimSpace(fields["TradeInfo"])
+	if tradeInfo == "" {
+		return trace
+	}
+
+	var payload DepositNotifyPayload
+	if plain, _, err := decryptTradeInfo(tradeInfo, c.HashKey, c.HashIV); err == nil {
+		if parsed, parseErr := ParseDepositNotify([]byte(plain)); parseErr == nil {
+			payload = parsed
+		}
+	} else if isTradeInfoPlaintext([]byte(tradeInfo)) {
+		if parsed, parseErr := ParseDepositNotify([]byte(tradeInfo)); parseErr == nil {
+			payload = parsed
+		}
+	}
+
+	if strings.TrimSpace(trace.ProviderOrderNo) == "" {
+		trace.ProviderOrderNo = strings.TrimSpace(payload.MerchantOrderNo)
+	}
+	if strings.TrimSpace(trace.ProviderTradeNo) == "" {
+		trace.ProviderTradeNo = strings.TrimSpace(payload.TradeNo)
+	}
+	return trace
 }
 
 func BuildDepositAutoSubmitForm(action string, fields map[string]string) string {

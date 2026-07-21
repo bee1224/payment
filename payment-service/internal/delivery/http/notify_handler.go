@@ -7,31 +7,50 @@ import (
 	"io"
 	"log"
 	nethttp "net/http"
+	"strings"
 
+	"payment-service/internal/domain"
 	"payment-service/pkg/response"
 )
+
+const maxDepositNotifyBodyBytes int64 = 1 << 20
 
 func (h *DepositHandler) NewebpayDepositNotify(w nethttp.ResponseWriter, r *nethttp.Request) {
 	h.DepositProviderNotify(w, r, "newebpay")
 }
 
 func (h *DepositHandler) DepositProviderNotify(w nethttp.ResponseWriter, r *nethttp.Request, providerCode string) {
+	sourceIP := h.requestSourceIP(r)
+	if !h.allowlist.Allows(sourceIP) {
+		log.Printf("%s notify rejected: source_ip=%s reason=allowlist", providerCode, sourceIP)
+		response.JSON(w, nethttp.StatusUnauthorized, map[string]string{"error": "source ip is not in deposit callback allowlist"})
+		return
+	}
+	r.Body = nethttp.MaxBytesReader(w, r.Body, maxDepositNotifyBodyBytes)
 	fields, err := readNotifyFields(r)
 	if err != nil {
-		log.Printf("%s notify read failed: %v", providerCode, err)
+		log.Printf("%s notify read failed: source_ip=%s error=%v", providerCode, sourceIP, err)
 		response.JSON(w, nethttp.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+	trace := domain.DepositNotifyTrace{
+		Headers:         snapshotHeaders(r.Header),
+		SourceIP:        sourceIP,
+		ProviderOrderNo: bestEffortNotifyOrderNo(fields),
+		ProviderTradeNo: bestEffortNotifyTradeNo(fields),
 	}
 
-	result, err := h.depositService.HandleDepositProviderNotification(providerCode, fields)
+	result, err := h.depositService.HandleDepositProviderNotification(providerCode, fields, trace)
 	if err != nil {
-		log.Printf("%s notify failed: fields=%v %s error=%v", providerCode, fieldNames(fields), notifyFingerprint(fields), err)
+		log.Printf("%s notify failed: source_ip=%s provider_order_no=%s provider_trade_no=%s fields=%v %s error=%v", providerCode, trace.SourceIP, trace.ProviderOrderNo, trace.ProviderTradeNo, fieldNames(fields), notifyFingerprint(fields), err)
 		response.JSON(w, nethttp.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	log.Printf("%s notify success: order_no=%s status=%s trade_no=%s %s", providerCode, result.Order.OrderNo, result.Order.Status, result.Order.ProviderTradeNo, notifyFingerprint(fields))
-	if err := h.deliverGatewayDepositCallback(result.Order); err != nil {
-		log.Printf("gateway callback failed: order_no=%s error=%v", result.Order.OrderNo, err)
+	log.Printf("%s notify success: source_ip=%s order_no=%s status=%s trade_no=%s %s", providerCode, trace.SourceIP, result.Order.OrderNo, result.Order.Status, result.Order.ProviderTradeNo, notifyFingerprint(fields))
+	if result.NotifyMerchant {
+		if err := h.depositService.DispatchMerchantDepositCallback(r.Context(), result.Order); err != nil {
+			log.Printf("gateway callback failed: order_no=%s error=%v", result.Order.OrderNo, err)
+		}
 	}
 
 	response.JSON(w, nethttp.StatusOK, map[string]any{
@@ -56,6 +75,34 @@ func fieldNames(fields map[string]string) []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+func snapshotHeaders(headers nethttp.Header) map[string][]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	cloned := make(map[string][]string, len(headers))
+	for key, values := range headers {
+		cloned[key] = append([]string(nil), values...)
+	}
+	return cloned
+}
+
+func bestEffortNotifyOrderNo(fields map[string]string) string {
+	return firstNonEmptyNotifyField(fields, "MerchantOrderNo", "merchant_order_no", "order_no", "OrderNo")
+}
+
+func bestEffortNotifyTradeNo(fields map[string]string) string {
+	return firstNonEmptyNotifyField(fields, "TradeNo", "trade_no", "tradeNo")
+}
+
+func firstNonEmptyNotifyField(fields map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(fields[key]); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func readNotifyFields(r *nethttp.Request) (map[string]string, error) {

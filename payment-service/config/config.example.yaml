@@ -2,11 +2,46 @@ app:
   name: RIG001 Gateway
   env: local
   port: 8080
+  # The web console remains disabled until all three fields are set.
+  admin_session_secret: "replace-with-at-least-32-random-bytes"
+  admin_initial_username: "admin"
+  # pbkdf2-sha256:<iterations>:<salt hex>:<derived key hex>; use the documented bootstrap command.
+  admin_initial_password_hash: ""
+  receipt_storage_path: "/var/lib/payment-service/receipts"
+  receipt_max_size_mb: 10
+  callback_worker_interval: 15
+  callback_max_attempts: 5
+  callback_timeout_seconds: 10
+  admin_allowed_origins:
+    - "https://admin.nnviopp.com"
+  admin_cookie_domain: ""
+  admin_cookie_same_site: "Lax"
+  merchant_secret_encryption_key: "replace-with-a-long-random-secret"
+  trusted_proxy_cidrs:
+    - "127.0.0.1/32"
+  read_header_timeout_seconds: 10
+  read_timeout_seconds: 15
+  write_timeout_seconds: 30
+  idle_timeout_seconds: 60
+  shutdown_timeout_seconds: 15
+  # Optional HTTPS Slack-compatible webhook for payout operational alerts.
+  alert_webhook_url: ""
+  alert_webhook_timeout_seconds: 5
+  # A database-backed lease prevents duplicate worker execution across instances.
+  worker_lease_seconds: 45
+  # Disabled by default. Allows an MFA-authenticated ADMIN to send a one-off
+  # test deposit success callback without changing the order or ledger.
+  test_deposit_callbacks_enabled: false
+  # Must remain false in production. Sandbox may enable an explicitly implemented mock provider.
+  mock_provider_enabled: false
+  # Required for production/sandbox startup validation.
+  public_base_url: "https://api.nnviopp.com"
 
 database:
   dsn: "user:password@tcp(127.0.0.1:3306)/payment_service?parseTime=true"
 
 newebpay:
+  environment: "production"
   mpg_url: "https://core.newebpay.com/MPG/mpg_gateway"
   merchant_id: "MS123456789"
   hash_key: "your_hash_key"
@@ -15,11 +50,18 @@ newebpay:
   return_url: "https://api.nnviopp.com/api/v1/deposits/payment-result"
 
 gateway:
-  base_url: "https://api.nnviopp.com"
+  base_url: "https://upstream-payout-provider.example"
   customer_id: "RIG001"
-  sign_key: "23ebf933a239994547bcafbca6c7fb0ed8a2b041dded453885d8c40788347725"
+  hmac_secret: "replace-with-current-gateway-hmac-secret"
+  previous_hmac_secret: ""
   max_skew_seconds: 300
   payout_notify_url: "https://api.nnviopp.com/api/payments/callback"
+  deposit_callback_allowlist:
+    - "35.220.239.87"
+    - "159.198.40.128"
+  payout_callback_allowlist:
+    - "35.220.239.87"
+    - "159.198.40.128"
   http_timeout_seconds: 15
 
 merchant:

@@ -1,0 +1,28 @@
+# Draft only. Install and reload on the VPS only after explicit approval.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name sandbox-api.nnviopp.com;
+    client_max_body_size 20m;
+    access_log /var/log/nginx/nnviopp-sandbox-access.log;
+    error_log /var/log/nginx/nnviopp-sandbox-error.log warn;
+
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_read_timeout 60s;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 60s;
+        add_header Cache-Control "no-store" always;
+    }
+}
+
+# Add the matching 443 TLS server after DNS and certificate issuance. Keep the
+# proxy headers, timeout, body-size and separate log directives identical.

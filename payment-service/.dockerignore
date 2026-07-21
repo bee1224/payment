@@ -1,8 +1,15 @@
 .git
 .env
+.env.*
 config/config.yaml
 .gocache
 .gopath
 .deploy-tmp
+.deploy-backups
+*.pem
+*.key
+node_modules
+coverage
+tmp
 api.exe
 bin

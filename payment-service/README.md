@@ -1,86 +1,43 @@
-# RIG001 Gateway
+# nnviopp Payment Service
 
-整合代收與代付流程的服務，目前代收實作已收斂為 `NewebPay` 單一 provider，並只對外提供 7 種收款方式。
+## 專案簡介
 
-## 目前代收支援的收款方式
+Go 1.22／MariaDB 10.11 支付服務，提供代收、代付工作流、人工代付、帳務、商戶通知與 React/Vite 管理端。`RIG001` 是目前主要 Merchant／Customer 識別，不是系統名稱；既有對外欄位與路由維持 RY-compatible contract。NewebPay 是目前代收 Provider。
 
-| `pay_channel_id` | `channel_code` | 說明 |
-|---|---|---|
-| `1000` | `CREDIT` | 信用卡一次付清 |
-| `1001` | `APPLEPAY` | Apple Pay |
-| `1002` | `GOOGLEPAY` | Google Pay |
-| `1005` | `WEBATM` | WebATM |
-| `1006` | `VACC` | ATM 虛擬帳號 |
-| `1007` | `CVS` | 超商代碼 |
-| `1008` | `BARCODE` | 超商條碼 |
+## 第一階段狀態
 
-不再支援的舊渠道若仍被傳入，系統會回覆 `unsupported pay_channel_id`。
+**Code Verified / Test Verified：** 第一階段核心程式、Migration 與雙環境設定已存在。**Sandbox Verified：** 部署狀態以既有驗收紀錄為準。**Pending External Smoke Test：** 外部商戶 callback smoke test。**Production Unverified：** 未因程式或歷史紀錄而宣告 Production Ready。
 
-## 啟動
+## 技術組成與能力
 
-```sh
-go mod tidy
-go run ./cmd/api
+- Go API、MariaDB、Docker Compose、Nginx、DB-backed background workers。
+- NewebPay 代收、付款跳轉、Notify、Ledger 與商戶 callback。
+- 代付建立／查詢、人工 claim、收據、確認、Audit、告警與 callback retry。
+- 管理端登入、Session、CSRF、MFA 與 RBAC。
+
+支援代收渠道：`1000 CREDIT`、`1001 APPLEPAY`、`1002 GOOGLEPAY`、`1005 WEBATM`、`1006 VACC`、`1007 CVS`、`1008 BARCODE`。
+
+## 本地開發與驗證
+
+在 `payment-service/`：
+
+```bash
+export GOCACHE="$HOME/.cache/go-build"
+export GOPATH="$HOME/go"
+go test ./...
+go build -buildvcs=false ./cmd/api
 ```
 
-## Namecheap VPS 雙環境部署
+目前唯一的本機開發與操作環境是 WSL／Bash；設定及本地 Compose 請見 [本機開發](docs/operations/local-development.md) 與 [WSL 操作](docs/operations/wsl-operations.md)。一般啟動不需要執行 `go mod tidy`。
 
-如果要在同一台 Namecheap VPS 同時跑正式與對接環境，專案已提供可直接套用的配置骨架：
+## Production／Sandbox
 
-- 正式 env 範例：`.env.prod.example`
-- 測試 env 範例：`.env.test.example`
-- 正式 Nginx：`deploy/nginx/payment.conf`
-- 測試 Nginx：`deploy/nginx/payment-test.conf`
-- Namecheap 啟動腳本：`deploy/namecheap/bootstrap-dual-env.sh`
-- Namecheap IP 綁定 Nginx：`deploy/nginx/payment-prod-namecheap.conf`
-- Namecheap IP 綁定 Nginx：`deploy/nginx/payment-test-namecheap.conf`
-- 部署說明：`docs/dual-environment-namecheap-vps.md`
+Production：`api.nnviopp.com`、`/opt/payment/payment-service`；Sandbox：`sandbox-api.nnviopp.com`、`sandbox.nnviopp.com`、`/opt/payment/payment-service-sandbox`。兩者必須隔離 DB、帳號、Secret、Provider credential、callback、network、volume 與資料。詳細拓樸見 [Environment Topology](docs/architecture/environment-topology.md)。
 
-## API
+## 文件入口
 
-| 方法 | 路徑 | 說明 |
-|---|---|---|
-| GET | `/health` | 健康檢查 |
-| POST | `/api/pay_order` | RY 相容的代收建立訂單 |
-| POST | `/api/query_transaction` | RY 相容的代收查單 |
-| POST | `/api/payments/pay_order` | RY 相容的代付下單 |
-| POST | `/api/payments/query_transaction` | RY 相容的代付查單 |
-| POST | `/api/payments/balance` | RY 相容的代付餘額查詢 |
-| POST | `/api/payments/callback` | RY 代付 callback，商戶需回 `OK` |
-| GET | `/api/v1/deposits/{order_no}` | 查詢內部代收訂單 |
-| GET | `/api/v1/deposits/{order_no}/redirect` | 取得 NewebPay 跳轉頁 |
-| POST | `/api/v1/deposits/providers/{provider}/notifications` | provider 代收通知入口 |
-| GET / POST | `/api/v1/deposits/payment-result` | NewebPay 前台結果頁 |
+請從 [文件索引](docs/README.md) 開始。可直接提供外部系統商的文件位於 [外部系統串接閱讀指南](docs/external/README.md)；內部 Backend 設計與部署文件仍分別位於 `docs/backend/` 與 `docs/operations/`。
 
-`/api/v1/deposits` 與 `/api/v1/deposits/query` 仍保留相容路由，但已標記 `Deprecation: true`，建議改用 `/api/pay_order` 與 `/api/query_transaction`。
+## 安全與部署提醒
 
-## 文件
-
-### 對外溝通用
-
-| 文件 | 說明 |
-|---|---|
-| [`docs/對外溝通用/01_RY完整技術文件.md`](docs/對外溝通用/01_RY完整技術文件.md) | 歷史整理版 RY 文件，已補充目前服務實際支援範圍 |
-| [`docs/對外溝通用/02_商戶端三方API對接文件.md`](docs/對外溝通用/02_商戶端三方API對接文件.md) | 商戶串接 RIG001 Gateway 的最新代收文件 |
-| [`docs/對外溝通用/03_商戶端代付API對接文件.md`](docs/對外溝通用/03_商戶端代付API對接文件.md) | 商戶端代付對接文件 |
-| [`docs/對外溝通用/04_銀行編碼.md`](docs/對外溝通用/04_銀行編碼.md) | 銀行代碼對照 |
-
-### 給我自己看得
-
-| 文件 | 說明 |
-|---|---|
-| [`docs/給我自己看得/01_文件索引與閱讀順序.md`](docs/給我自己看得/01_文件索引與閱讀順序.md) | 文件索引 |
-| [`docs/給我自己看得/02_RY收款串接規格.md`](docs/給我自己看得/02_RY收款串接規格.md) | 目前代收 API 與欄位整理 |
-| [`docs/給我自己看得/03_RY代付串接規格.md`](docs/給我自己看得/03_RY代付串接規格.md) | 代付串接規格 |
-| [`docs/給我自己看得/04_對外API流程與端點說明.md`](docs/給我自己看得/04_對外API流程與端點說明.md) | 對外 API 流程 |
-| [`docs/給我自己看得/05_AWS部署與環境變數說明.md`](docs/給我自己看得/05_AWS部署與環境變數說明.md) | 部署與環境變數 |
-| [`docs/給我自己看得/07_RY對接規格確認清單.md`](docs/給我自己看得/07_RY對接規格確認清單.md) | 對接缺口與確認項 |
-| [`docs/給我自己看得/10_RY收款渠道編碼對照表.md`](docs/給我自己看得/10_RY收款渠道編碼對照表.md) | 最新代收渠道對照 |
-| [`docs/給我自己看得/11_支付通道與供應商架構.md`](docs/給我自己看得/11_支付通道與供應商架構.md) | provider 與通道架構 |
-| [`docs/給我自己看得/12_多代收通道擴充架構.md`](docs/給我自己看得/12_多代收通道擴充架構.md) | 多 provider 擴充設計 |
-| [`docs/給我自己看得/13_核心資料庫結構與帳務流程.md`](docs/給我自己看得/13_核心資料庫結構與帳務流程.md) | ERD 與帳務流程 |
-| [`docs/給我自己看得/14_系統異常排查指南.md`](docs/給我自己看得/14_系統異常排查指南.md) | 異常排查 |
-| [`docs/給我自己看得/15_藍新代收串接說明.md`](docs/給我自己看得/15_藍新代收串接說明.md) | NewebPay 串接備忘 |
-| [`docs/給我自己看得/16_RY收款API測試集合（Postman）.json`](docs/給我自己看得/16_RY收款API測試集合（Postman）.json) | 收款 API 測試集合 |
-| [`docs/給我自己看得/17_RY收款API測試環境（Postman）.json`](docs/給我自己看得/17_RY收款API測試環境（Postman）.json) | 收款 API 測試環境 |
-| [`docs/給我自己看得/18_代收資料流.md`](docs/給我自己看得/18_代收資料流.md) | 最新代收資料流 |
+payment-service 是 API Provider。對外 API 與商戶 Callback 都採 HMAC-SHA256、timestamp、nonce 與防重放；Callback 使用商戶專屬且可輪替的 Callback Signing Secret。Merchant API Key、API Request Signing Secret 與 Callback Signing Secret 不得混用，Sandbox 與 Production 必須隔離。Callback 成功條件為 HTTP 2xx 且 response body bytes 精確為大寫純文字 `OK`，否則進入重送流程。

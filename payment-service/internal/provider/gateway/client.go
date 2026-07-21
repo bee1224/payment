@@ -3,16 +3,12 @@ package gateway
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
-	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -27,7 +23,7 @@ const (
 type PayoutClient struct {
 	baseURL    string
 	customerID string
-	signKey    string
+	hmacSecret string
 	notifyURL  string
 	httpClient *http.Client
 	now        func() time.Time
@@ -48,7 +44,6 @@ type CreatePayoutRequest struct {
 	PayCity          string `json:"pay_city,omitempty"`
 	PayValidateID    string `json:"pay_validate_id,omitempty"`
 	PayCurrency      string `json:"pay_currency,omitempty"`
-	PayMD5Sign       string `json:"pay_md5_sign"`
 }
 
 type CreatePayoutResponse struct {
@@ -67,7 +62,6 @@ type QueryPayoutRequest struct {
 	PayCustomerID string   `json:"pay_customer_id"`
 	PayApplyDate  string   `json:"pay_apply_date"`
 	PayOrderID    []string `json:"pay_order_id"`
-	PayMD5Sign    string   `json:"pay_md5_sign"`
 }
 
 type QueryPayoutResponse struct {
@@ -91,7 +85,6 @@ type QueryPayoutData struct {
 type BalanceRequest struct {
 	PayCustomerID string `json:"pay_customer_id"`
 	PayApplyDate  string `json:"pay_apply_date"`
-	PayMD5Sign    string `json:"pay_md5_sign"`
 }
 
 type BalanceResponse struct {
@@ -112,7 +105,6 @@ type PayoutCallbackRequest struct {
 	OrderID         string `json:"order_id"`
 	Amount          string `json:"amount"`
 	DateTime        string `json:"datetime"`
-	Sign            string `json:"sign"`
 	TransactionID   string `json:"transaction_id"`
 	TransactionCode string `json:"transaction_code"`
 	TransactionMsg  string `json:"transaction_msg"`
@@ -127,14 +119,14 @@ func (e *UpstreamError) Error() string {
 	return fmt.Sprintf("gateway payout upstream returned HTTP %d", e.StatusCode)
 }
 
-func NewPayoutClient(baseURL, customerID, signKey, notifyURL string, timeout time.Duration) *PayoutClient {
+func NewPayoutClient(baseURL, customerID, hmacSecret, notifyURL string, timeout time.Duration) *PayoutClient {
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
 	return &PayoutClient{
 		baseURL:    strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		customerID: strings.TrimSpace(customerID),
-		signKey:    strings.TrimSpace(signKey),
+		hmacSecret: strings.TrimSpace(hmacSecret),
 		notifyURL:  strings.TrimSpace(notifyURL),
 		httpClient: &http.Client{Timeout: timeout},
 		now:        time.Now,
@@ -143,6 +135,10 @@ func NewPayoutClient(baseURL, customerID, signKey, notifyURL string, timeout tim
 
 func (c *PayoutClient) NotifyURL() string {
 	return c.notifyURL
+}
+
+func (c *PayoutClient) CustomerID() string {
+	return c.customerID
 }
 
 func (c *PayoutClient) CreatePayout(ctx context.Context, req CreatePayoutRequest) (CreatePayoutResponse, error) {
@@ -178,29 +174,6 @@ func (c *PayoutClient) QueryBalance(ctx context.Context, req BalanceRequest) (Ba
 	return result, nil
 }
 
-func (c *PayoutClient) VerifyCallback(req PayoutCallbackRequest) error {
-	if strings.TrimSpace(req.Sign) == "" {
-		return errors.New("sign is required")
-	}
-	fields := map[string]any{
-		"customer_id":      req.CustomerID,
-		"order_id":         req.OrderID,
-		"amount":           req.Amount,
-		"datetime":         req.DateTime,
-		"transaction_id":   req.TransactionID,
-		"transaction_code": req.TransactionCode,
-		"transaction_msg":  req.TransactionMsg,
-	}
-	expected, err := Sign(fields, c.signKey)
-	if err != nil {
-		return err
-	}
-	if subtle.ConstantTimeCompare([]byte(expected), []byte(strings.ToUpper(req.Sign))) != 1 {
-		return errors.New("callback signature verification failed")
-	}
-	return nil
-}
-
 func (c *PayoutClient) prepareCreateRequest(req *CreatePayoutRequest) error {
 	if err := c.prepareCommon(&req.PayCustomerID, &req.PayApplyDate); err != nil {
 		return err
@@ -228,17 +201,7 @@ func (c *PayoutClient) prepareCreateRequest(req *CreatePayoutRequest) error {
 	if err != nil || (callbackURL.Scheme != "http" && callbackURL.Scheme != "https") {
 		return errors.New("pay_notify_url must be an absolute HTTP(S) URL")
 	}
-	fields := map[string]any{
-		"pay_customer_id": req.PayCustomerID, "pay_apply_date": req.PayApplyDate,
-		"pay_order_id": req.PayOrderID, "pay_notify_url": req.PayNotifyURL,
-		"pay_amount": req.PayAmount, "pay_account_name": req.PayAccountName,
-		"pay_card_no": req.PayCardNo, "pay_bank_name": req.PayBankName,
-		"pay_channel_id": req.PayChannelID, "pay_sub_branch": req.PaySubBranch,
-		"pay_sub_branch_code": req.PaySubBranchCode, "pay_city": req.PayCity,
-		"pay_validate_id": req.PayValidateID, "pay_currency": req.PayCurrency,
-	}
-	req.PayMD5Sign, err = Sign(fields, c.signKey)
-	return err
+	return nil
 }
 
 func (c *PayoutClient) prepareQueryRequest(req *QueryPayoutRequest) error {
@@ -248,33 +211,22 @@ func (c *PayoutClient) prepareQueryRequest(req *QueryPayoutRequest) error {
 	if len(req.PayOrderID) == 0 {
 		return errors.New("pay_order_id is required")
 	}
-	var err error
-	req.PayMD5Sign, err = Sign(map[string]any{
-		"pay_customer_id": req.PayCustomerID,
-		"pay_apply_date":  req.PayApplyDate,
-		"pay_order_id":    req.PayOrderID,
-	}, c.signKey)
-	return err
+	return nil
 }
 
 func (c *PayoutClient) prepareBalanceRequest(req *BalanceRequest) error {
 	if err := c.prepareCommon(&req.PayCustomerID, &req.PayApplyDate); err != nil {
 		return err
 	}
-	var err error
-	req.PayMD5Sign, err = Sign(map[string]any{
-		"pay_customer_id": req.PayCustomerID,
-		"pay_apply_date":  req.PayApplyDate,
-	}, c.signKey)
-	return err
+	return nil
 }
 
 func (c *PayoutClient) prepareCommon(customerID, applyDate *string) error {
 	if c.baseURL == "" {
 		return errors.New("gateway base URL is not configured")
 	}
-	if c.signKey == "" {
-		return errors.New("gateway sign key is not configured")
+	if c.hmacSecret == "" {
+		return errors.New("gateway hmac secret is not configured")
 	}
 	if c.customerID != "" {
 		if *customerID != "" && strings.TrimSpace(*customerID) != c.customerID {
@@ -301,6 +253,23 @@ func (c *PayoutClient) postJSON(ctx context.Context, path string, payload, resul
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	timestamp := strconv.FormatInt(c.now().Unix(), 10)
+	nonce := strconv.FormatInt(c.now().UnixNano(), 10)
+	signature, err := BuildHMACSignature(HMACRequestAuth{
+		CustomerID: c.customerID,
+		Timestamp:  timestamp,
+		Nonce:      nonce,
+		Method:     http.MethodPost,
+		Path:       path,
+		Body:       body,
+	}, c.hmacSecret)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Customer-Id", c.customerID)
+	req.Header.Set("X-Timestamp", timestamp)
+	req.Header.Set("X-Nonce", nonce)
+	req.Header.Set("X-Signature", signature)
 	res, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("gateway payout request failed; do not retry before querying provider state: %w", err)
@@ -314,60 +283,4 @@ func (c *PayoutClient) postJSON(ctx context.Context, path string, payload, resul
 		return fmt.Errorf("decode gateway payout response: %w", err)
 	}
 	return nil
-}
-
-func Sign(fields map[string]any, signKey string) (string, error) {
-	if strings.TrimSpace(signKey) == "" {
-		return "", errors.New("sign key is required")
-	}
-	keys := make([]string, 0, len(fields))
-	for key, value := range fields {
-		if !empty(value) {
-			keys = append(keys, key)
-		}
-	}
-	sort.Strings(keys)
-	var builder strings.Builder
-	for _, key := range keys {
-		value, err := signValue(fields[key])
-		if err != nil {
-			return "", err
-		}
-		builder.WriteString(key)
-		builder.WriteByte('=')
-		builder.WriteString(value)
-		builder.WriteByte('&')
-	}
-	builder.WriteString("key=")
-	builder.WriteString(signKey)
-	sum := md5.Sum([]byte(builder.String()))
-	return strings.ToUpper(hex.EncodeToString(sum[:])), nil
-}
-
-func empty(value any) bool {
-	if value == nil {
-		return true
-	}
-	if text, ok := value.(string); ok {
-		return text == ""
-	}
-	return false
-}
-
-func signValue(value any) (string, error) {
-	switch typed := value.(type) {
-	case string:
-		return typed, nil
-	case []string:
-		raw, err := json.Marshal(typed)
-		return string(raw), err
-	case json.Number:
-		return typed.String(), nil
-	default:
-		raw, err := json.Marshal(typed)
-		if err != nil {
-			return "", err
-		}
-		return string(raw), nil
-	}
 }

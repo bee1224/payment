@@ -61,6 +61,12 @@ func decryptTradeInfo(cipherText, hashKey, hashIV string) (string, string, error
 	if len(zeroUnpadded) < len(plain) && isTradeInfoPlaintext(zeroUnpadded) {
 		return string(zeroUnpadded), "zero", nil
 	}
+	trimmedPrintable := bytes.TrimRightFunc(plain, func(r rune) bool {
+		return !isTradeInfoPrintableByte(byte(r))
+	})
+	if len(trimmedPrintable) < len(plain) && isTradeInfoPlaintext(trimmedPrintable) {
+		return string(trimmedPrintable), "trim-nonprintable", nil
+	}
 	if isTradeInfoPlaintext(plain) {
 		return string(plain), "none", nil
 	}
@@ -75,7 +81,7 @@ func tradeInfoDiagnostic(data []byte) string {
 	}
 	printable := 0
 	for _, value := range data {
-		if (value >= 32 && value <= 126) || value == '\r' || value == '\n' || value == '\t' {
+		if isTradeInfoPrintableByte(value) {
 			printable++
 		}
 	}
@@ -88,6 +94,10 @@ func tradeInfoDiagnostic(data []byte) string {
 		"cipher_plain_bytes=%d last_byte=%d trailing_zeros=%d printable_percent=%d",
 		len(data), lastByte, trailingZeros, printablePercent,
 	)
+}
+
+func isTradeInfoPrintableByte(value byte) bool {
+	return (value >= 32 && value <= 126) || value == '\r' || value == '\n' || value == '\t'
 }
 
 func isTradeInfoPlaintext(data []byte) bool {

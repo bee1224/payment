@@ -5,40 +5,19 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 )
 
-func TestSignMatchesProviderExample(t *testing.T) {
-	fields := map[string]any{
-		"bank_account": []string{
-			"7000000000123456001",
-			"7000000000123456002",
-			"7000000000123456003",
-		},
-		"pay_amount":      "10000",
-		"pay_apply_date":  "1693236045",
-		"pay_channel_id":  "1000",
-		"pay_customer_id": "88888",
-		"pay_notify_url":  "https://merchant.example/callback",
-		"pay_order_id":    "TEST0123456",
-		"user_name":       "Tester",
-	}
-	got, err := Sign(fields, "12345")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "A152D7087315CF82CE9983EA03105D29" {
-		t.Fatalf("unexpected signature: %s", got)
-	}
-}
-
 func TestCreatePayoutUsesProviderPathAndSignsPayload(t *testing.T) {
 	var received CreatePayoutRequest
+	var receivedHeaders http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != PayoutCreatePath {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
+		receivedHeaders = r.Header.Clone()
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
 			t.Fatal(err)
 		}
@@ -65,27 +44,34 @@ func TestCreatePayoutUsesProviderPathAndSignsPayload(t *testing.T) {
 	if received.PayCustomerID != "50000" || received.PayApplyDate != "1686642036" {
 		t.Fatalf("credentials/timestamp not populated: %#v", received)
 	}
-	fields := map[string]any{
-		"pay_customer_id": received.PayCustomerID, "pay_apply_date": received.PayApplyDate,
-		"pay_order_id": received.PayOrderID, "pay_notify_url": received.PayNotifyURL,
-		"pay_amount": received.PayAmount, "pay_account_name": received.PayAccountName,
-		"pay_card_no": received.PayCardNo, "pay_bank_name": received.PayBankName,
-	}
-	expected, err := Sign(fields, "secret")
+	body, err := json.Marshal(received)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if received.PayMD5Sign != expected {
-		t.Fatalf("signature mismatch: got %s want %s", received.PayMD5Sign, expected)
+	expected, err := BuildHMACSignature(HMACRequestAuth{
+		CustomerID: "50000",
+		Timestamp:  receivedHeaders.Get("X-Timestamp"),
+		Nonce:      receivedHeaders.Get("X-Nonce"),
+		Method:     http.MethodPost,
+		Path:       PayoutCreatePath,
+		Body:       body,
+	}, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receivedHeaders.Get("X-Signature") != expected {
+		t.Fatalf("signature mismatch: got %s want %s", receivedHeaders.Get("X-Signature"), expected)
 	}
 }
 
 func TestQueryPayoutSignsOrderIDAsJSONArray(t *testing.T) {
 	var received QueryPayoutRequest
+	var receivedHeaders http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != PayoutQueryPath {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
+		receivedHeaders = r.Header.Clone()
 		_ = json.NewDecoder(r.Body).Decode(&received)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"code":0,"message":"success","data":{"status":1}}`))
@@ -97,13 +83,23 @@ func TestQueryPayoutSignsOrderIDAsJSONArray(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected, _ := Sign(map[string]any{
-		"pay_customer_id": "50000",
-		"pay_apply_date":  "1686642036",
-		"pay_order_id":    []string{"ORDER-1"},
+	body, err := json.Marshal(received)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := BuildHMACSignature(HMACRequestAuth{
+		CustomerID: "50000",
+		Timestamp:  receivedHeaders.Get("X-Timestamp"),
+		Nonce:      receivedHeaders.Get("X-Nonce"),
+		Method:     http.MethodPost,
+		Path:       PayoutQueryPath,
+		Body:       body,
 	}, "secret")
-	if received.PayMD5Sign != expected {
-		t.Fatalf("array signature mismatch: got %s want %s", received.PayMD5Sign, expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receivedHeaders.Get("X-Signature") != expected {
+		t.Fatalf("array signature mismatch: got %s want %s", receivedHeaders.Get("X-Signature"), expected)
 	}
 }
 
@@ -129,16 +125,30 @@ func TestVerifyPayoutCallback(t *testing.T) {
 		DateTime: "2020-05-12 21:06:57", TransactionID: "P123",
 		TransactionCode: "30000", TransactionMsg: "paid",
 	}
-	req.Sign, _ = Sign(map[string]any{
-		"customer_id": req.CustomerID, "order_id": req.OrderID, "amount": req.Amount,
-		"datetime": req.DateTime, "transaction_id": req.TransactionID,
-		"transaction_code": req.TransactionCode, "transaction_msg": req.TransactionMsg,
-	}, "secret")
-	if err := client.VerifyCallback(req); err != nil {
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := HMACRequestAuth{
+		CustomerID: "50000",
+		Timestamp:  strconv.FormatInt(time.Now().Unix(), 10),
+		Nonce:      "callback-nonce-001",
+		Method:     http.MethodPost,
+		Path:       "/api/payments/callback",
+		Body:       body,
+	}
+	signature, err := BuildHMACSignature(auth, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth.Signature = signature
+	if err := VerifyHMACRequest(auth, client.hmacSecret, time.Now(), 5*time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	req.Amount = "301.0000"
-	if err := client.VerifyCallback(req); err == nil {
+	body, _ = json.Marshal(req)
+	auth.Body = body
+	if err := VerifyHMACRequest(auth, client.hmacSecret, time.Now(), 5*time.Minute); err == nil {
 		t.Fatal("tampered callback must fail verification")
 	}
 }

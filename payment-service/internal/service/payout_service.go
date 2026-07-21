@@ -3,10 +3,16 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -19,11 +25,16 @@ import (
 var ErrMerchantAuthFailed = errors.New("merchant authentication failed")
 
 type PayoutService struct {
-	store           repository.PayoutStore
-	client          *providerGateway.PayoutClient
-	httpClient      *http.Client
-	merchantSecrets map[string]string
-	now             func() time.Time
+	store               repository.PayoutStore
+	client              *providerGateway.PayoutClient
+	httpClient          *http.Client
+	merchantSecrets     map[string]string
+	callbackSigningKeys repository.CallbackSigningKeyResolver
+	authMaxSkew         time.Duration
+	nonceStore          repository.ReplayNonceStore
+	now                 func() time.Time
+	reconciliation      *ReconciliationService
+	alertNotifier       PayoutAlertNotifier
 }
 
 type CreatePayoutOrderRequest struct {
@@ -59,12 +70,26 @@ type CancelPayoutOrderRequest struct {
 }
 
 type RotateMerchantAPIKeyRequest struct {
-	APIKey    string `json:"api_key"`
-	ExpiresAt string `json:"expires_at,omitempty"`
+	APIKey            string `json:"api_key"`
+	ExpiresAt         string `json:"expires_at,omitempty"`
+	PreviousExpiresAt string `json:"previous_expires_at,omitempty"`
+	Reason            string `json:"reason,omitempty"`
 }
 
 type RevokeMerchantAPIKeyRequest struct {
 	APIKey string `json:"api_key"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type IssueMerchantAPIKeyRequest struct {
+	ExpiresAt         string `json:"expires_at,omitempty"`
+	PreviousExpiresAt string `json:"previous_expires_at,omitempty"`
+	Reason            string `json:"reason,omitempty"`
+}
+
+type IssuedMerchantAPIKeyView struct {
+	APIKey string               `json:"api_key"`
+	Keys   []MerchantAPIKeyView `json:"keys"`
 }
 
 type MerchantAPIKeyView struct {
@@ -77,6 +102,100 @@ type MerchantAPIKeyView struct {
 	RevokedAt     *time.Time `json:"revoked_at,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
+type MerchantAPIKeyAuditContext struct {
+	Actor        string
+	ActorRoles   []string
+	Checker      string
+	CheckerRoles []string
+	RequestID    string
+	SourceIP     string
+	UserAgent    string
+}
+
+type MerchantAPIKeyAuditView struct {
+	Action           string         `json:"action"`
+	KeyHash          string         `json:"key_hash"`
+	Actor            string         `json:"actor"`
+	Reason           string         `json:"reason,omitempty"`
+	RequestID        string         `json:"request_id,omitempty"`
+	SourceIP         string         `json:"source_ip,omitempty"`
+	UserAgent        string         `json:"user_agent,omitempty"`
+	Metadata         map[string]any `json:"metadata,omitempty"`
+	CreatedAt        time.Time      `json:"created_at"`
+	MerchantAPIKeyID *int64         `json:"merchant_api_key_id,omitempty"`
+}
+
+type PayoutReviewAuditContext struct {
+	Actor        string
+	ActorRoles   []string
+	Checker      string
+	CheckerRoles []string
+	Reason       string
+	RequestID    string
+	SourceIP     string
+	UserAgent    string
+}
+
+type PayoutReviewAuditView struct {
+	Action        string         `json:"action"`
+	Actor         string         `json:"actor"`
+	Reason        string         `json:"reason,omitempty"`
+	RequestID     string         `json:"request_id,omitempty"`
+	SourceIP      string         `json:"source_ip,omitempty"`
+	UserAgent     string         `json:"user_agent,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
+	MerchantID    int64          `json:"merchant_id"`
+	PayoutOrderID int64          `json:"payout_order_id"`
+}
+
+type PayoutOperationalAlertView struct {
+	ID              int64      `json:"id"`
+	MerchantID      int64      `json:"merchant_id"`
+	PayoutOrderID   int64      `json:"payout_order_id"`
+	PayoutNo        string     `json:"payout_no"`
+	Category        string     `json:"category"`
+	Severity        string     `json:"severity"`
+	Status          string     `json:"status"`
+	Summary         string     `json:"summary"`
+	Details         string     `json:"details,omitempty"`
+	OccurrenceCount int        `json:"occurrence_count"`
+	FirstOccurredAt time.Time  `json:"first_occurred_at"`
+	LastOccurredAt  time.Time  `json:"last_occurred_at"`
+	ResolvedAt      *time.Time `json:"resolved_at,omitempty"`
+	ResolvedBy      string     `json:"resolved_by,omitempty"`
+	ResolveReason   string     `json:"resolve_reason,omitempty"`
+}
+
+type PayoutSettlementCurrencyView struct {
+	Currency                    string `json:"currency"`
+	MerchantAvailableCents      int64  `json:"merchant_available_cents"`
+	MerchantPendingCents        int64  `json:"merchant_pending_cents"`
+	PendingReviewCents          int64  `json:"pending_review_cents"`
+	ApprovedCents               int64  `json:"approved_cents"`
+	SubmittingCents             int64  `json:"submitting_cents"`
+	ProcessingCents             int64  `json:"processing_cents"`
+	CompletedCents              int64  `json:"completed_cents"`
+	FailedCents                 int64  `json:"failed_cents"`
+	CancelledOrRejectedCents    int64  `json:"cancelled_or_rejected_cents"`
+	ReversedCents               int64  `json:"reversed_cents"`
+	OpenOrderCount              int64  `json:"open_order_count"`
+	ProviderInFlightCents       int64  `json:"provider_inflight_cents"`
+	InternalManualHoldCents     int64  `json:"internal_manual_hold_cents"`
+	InternalTotalUnsettledCents int64  `json:"internal_total_unsettled_cents"`
+	ProviderBalanceCents        int64  `json:"provider_balance_cents"`
+	ProviderAvailableCents      int64  `json:"provider_available_cents"`
+	ProviderUnsettlementCents   int64  `json:"provider_unsettlement_cents"`
+	ProviderVsInflightGapCents  int64  `json:"provider_vs_inflight_gap_cents"`
+	MerchantPendingGapCents     int64  `json:"merchant_pending_gap_cents"`
+}
+
+type PayoutSettlementReportView struct {
+	GeneratedAt time.Time                      `json:"generated_at"`
+	CustomerID  string                         `json:"customer_id"`
+	Currencies  []PayoutSettlementCurrencyView `json:"currencies"`
 }
 
 type PayoutOrderView struct {
@@ -95,6 +214,20 @@ type PayoutOrderView struct {
 	CompletedAt      *time.Time               `json:"completed_at,omitempty"`
 	CreatedAt        time.Time                `json:"created_at"`
 	UpdatedAt        time.Time                `json:"updated_at"`
+}
+
+// AdminPayoutListRequest is intentionally limited to non-sensitive list data.
+type AdminPayoutListRequest struct {
+	Page, PageSize         int
+	Status, Query          string
+	CreatedFrom, CreatedTo *time.Time
+}
+
+type AdminPayoutListResult struct {
+	Items    []PayoutOrderView `json:"items"`
+	Page     int               `json:"page"`
+	PageSize int               `json:"page_size"`
+	Total    int               `json:"total"`
 }
 
 func NewPayoutService(store repository.PayoutStore, client *providerGateway.PayoutClient) *PayoutService {
@@ -116,8 +249,74 @@ func NewPayoutServiceWithSecrets(store repository.PayoutStore, client *providerG
 		client:          client,
 		httpClient:      &http.Client{Timeout: 10 * time.Second},
 		merchantSecrets: clonedSecrets,
+		authMaxSkew:     5 * time.Minute,
+		nonceStore:      repository.NewInMemoryReplayNonceStore(),
 		now:             time.Now,
 	}
+}
+
+func (s *PayoutService) SetMerchantAuthMaxSkew(skew time.Duration) {
+	if skew > 0 {
+		s.authMaxSkew = skew
+	}
+}
+
+func (s *PayoutService) SetCallbackSigningKeyResolver(resolver repository.CallbackSigningKeyResolver) {
+	s.callbackSigningKeys = resolver
+}
+
+func (s *PayoutService) SetReplayNonceStore(store repository.ReplayNonceStore) {
+	if store != nil {
+		s.nonceStore = store
+	}
+}
+
+func (s *PayoutService) SetReconciliationService(reconciliation *ReconciliationService) {
+	s.reconciliation = reconciliation
+}
+
+func (s *PayoutService) SetAlertNotifier(notifier PayoutAlertNotifier) { s.alertNotifier = notifier }
+
+func (s *PayoutService) RunReconciliation(ctx context.Context, req RunReconciliationRequest) (ReconciliationReportView, error) {
+	if s.reconciliation == nil {
+		return ReconciliationReportView{}, errors.New("reconciliation service is not configured")
+	}
+	return s.reconciliation.RunReconciliation(ctx, req)
+}
+
+func (s *PayoutService) GetReconciliationReport(ctx context.Context, runID int64) (ReconciliationReportView, error) {
+	if s.reconciliation == nil {
+		return ReconciliationReportView{}, errors.New("reconciliation service is not configured")
+	}
+	return s.reconciliation.GetReconciliationReport(ctx, runID)
+}
+
+func (s *PayoutService) ListReconciliationReports(ctx context.Context, req ListReconciliationReportsRequest) ([]ReconciliationReportView, error) {
+	if s.reconciliation == nil {
+		return nil, errors.New("reconciliation service is not configured")
+	}
+	return s.reconciliation.ListReconciliationReports(ctx, req)
+}
+
+func (s *PayoutService) GetReconciliationTrace(ctx context.Context, query domain.ReconciliationTraceQuery) (domain.ReconciliationTrace, error) {
+	if s.reconciliation == nil {
+		return domain.ReconciliationTrace{}, errors.New("reconciliation service is not configured")
+	}
+	return s.reconciliation.GetReconciliationTrace(ctx, query)
+}
+
+func (s *PayoutService) ResolveReconciliationMismatchWithAdjustment(ctx context.Context, itemID int64, req ResolveReconciliationAdjustmentRequest, audit PayoutReviewAuditContext) (ReconciliationMismatchView, error) {
+	if s.reconciliation == nil {
+		return ReconciliationMismatchView{}, errors.New("reconciliation service is not configured")
+	}
+	return s.reconciliation.ResolveMismatchWithAdjustment(ctx, itemID, req, audit)
+}
+
+func (s *PayoutService) ResolveReconciliationMismatchWithReversal(ctx context.Context, itemID int64, req ResolveReconciliationReversalRequest, audit PayoutReviewAuditContext) (ReconciliationMismatchView, error) {
+	if s.reconciliation == nil {
+		return ReconciliationMismatchView{}, errors.New("reconciliation service is not configured")
+	}
+	return s.reconciliation.ResolveMismatchWithReversal(ctx, itemID, req, audit)
 }
 
 func (s *PayoutService) CreatePayoutOrder(ctx context.Context, req CreatePayoutOrderRequest) (domain.PayoutOrder, error) {
@@ -125,6 +324,10 @@ func (s *PayoutService) CreatePayoutOrder(ctx context.Context, req CreatePayoutO
 	if err != nil {
 		return domain.PayoutOrder{}, err
 	}
+	return s.CreatePayoutOrderForMerchant(ctx, merchant, req)
+}
+
+func (s *PayoutService) CreatePayoutOrderForMerchant(ctx context.Context, merchant domain.Merchant, req CreatePayoutOrderRequest) (domain.PayoutOrder, error) {
 	amountCents, err := parseAmountToCents(req.Amount)
 	if err != nil {
 		return domain.PayoutOrder{}, err
@@ -149,6 +352,11 @@ func (s *PayoutService) CreatePayoutOrder(ctx context.Context, req CreatePayoutO
 	callbackURL := strings.TrimSpace(req.CallbackURL)
 	if callbackURL == "" {
 		callbackURL = merchant.CallbackURL
+	}
+	if callbackURL != "" {
+		if err := validatePayoutCallbackURL(callbackURL); err != nil {
+			return domain.PayoutOrder{}, err
+		}
 	}
 	order := domain.PayoutOrder{
 		MerchantCode:     merchant.Code,
@@ -180,9 +388,89 @@ func (s *PayoutService) CreatePayoutOrder(ctx context.Context, req CreatePayoutO
 }
 
 func (s *PayoutService) GetPayoutOrder(ctx context.Context, req QueryPayoutOrderRequest) (domain.PayoutOrder, error) {
-	if _, err := s.authenticateMerchant(ctx, req.MerchantID, req.APIKey); err != nil {
+	merchant, err := s.authenticateMerchant(ctx, req.MerchantID, req.APIKey)
+	if err != nil {
 		return domain.PayoutOrder{}, err
 	}
+	return s.GetPayoutOrderForMerchant(ctx, merchant, req)
+}
+
+// GetPayoutOrderForAdmin is only wired to the authenticated internal console.
+// It must never be exposed through the merchant routes because it bypasses
+// merchant ownership checks.
+func (s *PayoutService) GetPayoutOrderForAdmin(ctx context.Context, payoutNo string) (domain.PayoutOrder, error) {
+	return s.store.FindPayoutOrderByPayoutNo(ctx, strings.TrimSpace(payoutNo))
+}
+
+// ListPayoutOrdersForAdmin is deliberately restricted to the administration
+// surface. Merchant-facing APIs continue to use their own authenticated query.
+func (s *PayoutService) ListPayoutOrdersForAdmin(ctx context.Context, limit int) ([]PayoutOrderView, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	orders, err := s.store.ListPayoutsForReconcile(ctx, []domain.PayoutOrderStatus{
+		domain.PayoutOrderStatusPendingReview, domain.PayoutOrderStatusApproved,
+		domain.PayoutOrderStatusSubmitting, domain.PayoutOrderStatusProcessing,
+		domain.PayoutOrderStatusCompleted, domain.PayoutOrderStatusFailed,
+		domain.PayoutOrderStatusRejected, domain.PayoutOrderStatusCancelled,
+		domain.PayoutOrderStatus("PROCESSING"), domain.PayoutOrderStatus("PAID_PENDING_REVIEW"),
+		domain.PayoutOrderStatus("SUCCESS"), domain.PayoutOrderStatus("FAILED"), domain.PayoutOrderStatus("CANCELLED"),
+	}, time.Now().AddDate(100, 0, 0), limit)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]PayoutOrderView, 0, len(orders))
+	for _, order := range orders {
+		views = append(views, BuildPayoutOrderView(order))
+	}
+	return views, nil
+}
+
+func (s *PayoutService) ListPayoutOrdersForAdminPage(ctx context.Context, req AdminPayoutListRequest) (AdminPayoutListResult, error) {
+	if req.Page < 1 {
+		req.Page = 1
+	}
+	if req.PageSize < 1 || req.PageSize > 100 {
+		req.PageSize = 20
+	}
+	orders, err := s.ListPayoutOrdersForAdmin(ctx, 200)
+	if err != nil {
+		return AdminPayoutListResult{}, err
+	}
+	query, status := strings.ToLower(strings.TrimSpace(req.Query)), strings.ToLower(strings.TrimSpace(req.Status))
+	filtered := make([]PayoutOrderView, 0, len(orders))
+	for _, order := range orders {
+		if status != "" && strings.ToLower(string(order.Status)) != status {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(order.PayoutNo+" "+order.MerchantPayoutNo+" "+order.MerchantID), query) {
+			continue
+		}
+		if req.CreatedFrom != nil && order.CreatedAt.Before(*req.CreatedFrom) {
+			continue
+		}
+		if req.CreatedTo != nil && order.CreatedAt.After(*req.CreatedTo) {
+			continue
+		}
+		order.CallbackURL, order.FailureMessage = "", ""
+		filtered = append(filtered, order)
+	}
+	sort.Slice(filtered, func(i, j int) bool { return filtered[i].CreatedAt.After(filtered[j].CreatedAt) })
+	result := AdminPayoutListResult{Page: req.Page, PageSize: req.PageSize, Total: len(filtered)}
+	start := (req.Page - 1) * req.PageSize
+	if start >= len(filtered) {
+		result.Items = []PayoutOrderView{}
+		return result, nil
+	}
+	end := start + req.PageSize
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	result.Items = filtered[start:end]
+	return result, nil
+}
+
+func (s *PayoutService) GetPayoutOrderForMerchant(ctx context.Context, merchant domain.Merchant, req QueryPayoutOrderRequest) (domain.PayoutOrder, error) {
 	var (
 		order domain.PayoutOrder
 		err   error
@@ -191,7 +479,7 @@ func (s *PayoutService) GetPayoutOrder(ctx context.Context, req QueryPayoutOrder
 	case strings.TrimSpace(req.PayoutNo) != "":
 		order, err = s.store.FindPayoutOrderByPayoutNo(ctx, strings.TrimSpace(req.PayoutNo))
 	case strings.TrimSpace(req.MerchantPayoutNo) != "":
-		order, err = s.store.FindPayoutOrderByMerchantPayoutNo(ctx, strings.TrimSpace(req.MerchantID), strings.TrimSpace(req.MerchantPayoutNo))
+		order, err = s.store.FindPayoutOrderByMerchantPayoutNo(ctx, strings.TrimSpace(merchant.Code), strings.TrimSpace(req.MerchantPayoutNo))
 	default:
 		return domain.PayoutOrder{}, errors.New("payout_no or merchant_payout_no is required")
 	}
@@ -207,23 +495,29 @@ func (s *PayoutService) GetPayoutOrder(ctx context.Context, req QueryPayoutOrder
 	return order, nil
 }
 
-func (s *PayoutService) ApprovePayoutOrder(ctx context.Context, payoutNo string) (domain.PayoutOrder, error) {
-	order, err := s.store.ApprovePayoutOrder(ctx, payoutNo)
+func (s *PayoutService) ApprovePayoutOrder(ctx context.Context, payoutNo string, auditCtx PayoutReviewAuditContext) (domain.PayoutOrder, error) {
+	order, err := s.store.ApprovePayoutOrder(ctx, payoutNo, buildPayoutReviewAuditLog("approve", auditCtx, map[string]any{
+		"status_after": string(domain.PayoutOrderStatusApproved),
+	}))
 	if err != nil {
 		return domain.PayoutOrder{}, err
 	}
-	return s.dispatchApprovedPayout(ctx, order)
+	return order, nil
 }
 
-func (s *PayoutService) RejectPayoutOrder(ctx context.Context, payoutNo, reason string) (domain.PayoutOrder, error) {
-	return s.store.RejectPayoutOrder(ctx, payoutNo, reason)
+func (s *PayoutService) RejectPayoutOrder(ctx context.Context, payoutNo, reason string, auditCtx PayoutReviewAuditContext) (domain.PayoutOrder, error) {
+	return s.store.RejectPayoutOrder(ctx, payoutNo, reason, buildPayoutReviewAuditLog("reject", auditCtx, map[string]any{
+		"status_after": string(domain.PayoutOrderStatusRejected),
+	}))
 }
 
-func (s *PayoutService) CancelPayoutOrder(ctx context.Context, payoutNo, reason string) (domain.PayoutOrder, error) {
-	return s.store.CancelPayoutOrder(ctx, payoutNo, reason)
+func (s *PayoutService) CancelPayoutOrder(ctx context.Context, payoutNo, reason string, auditCtx PayoutReviewAuditContext) (domain.PayoutOrder, error) {
+	return s.store.CancelPayoutOrder(ctx, payoutNo, reason, buildPayoutReviewAuditLog("cancel", auditCtx, map[string]any{
+		"status_after": string(domain.PayoutOrderStatusCancelled),
+	}))
 }
 
-func (s *PayoutService) ResendMerchantCallback(ctx context.Context, payoutNo string) (domain.PayoutOrder, error) {
+func (s *PayoutService) ResendMerchantCallback(ctx context.Context, payoutNo string, auditCtx PayoutReviewAuditContext) (domain.PayoutOrder, error) {
 	order, err := s.store.FindPayoutOrderByPayoutNo(ctx, strings.TrimSpace(payoutNo))
 	if err != nil {
 		return domain.PayoutOrder{}, err
@@ -234,7 +528,16 @@ func (s *PayoutService) ResendMerchantCallback(ctx context.Context, payoutNo str
 	if strings.TrimSpace(order.CallbackURL) == "" {
 		return domain.PayoutOrder{}, errors.New("callback_url is required for resend")
 	}
+	if err := validatePayoutCallbackURL(order.CallbackURL); err != nil {
+		return domain.PayoutOrder{}, err
+	}
 	if err := s.enqueueMerchantCallback(ctx, order); err != nil {
+		return domain.PayoutOrder{}, err
+	}
+	if err := s.store.CreatePayoutReviewAuditLog(ctx, payoutNo, buildPayoutReviewAuditLog("resend_callback", auditCtx, map[string]any{
+		"status":       string(order.Status),
+		"callback_url": order.CallbackURL,
+	})); err != nil {
 		return domain.PayoutOrder{}, err
 	}
 	return order, nil
@@ -248,12 +551,63 @@ func (s *PayoutService) ListMerchantAPIKeys(ctx context.Context, merchantCode st
 	return buildMerchantAPIKeyViews(records), nil
 }
 
-func (s *PayoutService) RotateMerchantAPIKey(ctx context.Context, merchantCode string, req RotateMerchantAPIKeyRequest) ([]MerchantAPIKeyView, error) {
+func (s *PayoutService) ListMerchantAPIKeyAuditLogs(ctx context.Context, merchantCode string, limit int) ([]MerchantAPIKeyAuditView, error) {
+	entries, err := s.store.ListMerchantAPIKeyAuditLogs(ctx, strings.TrimSpace(merchantCode), limit)
+	if err != nil {
+		return nil, err
+	}
+	return buildMerchantAPIKeyAuditViews(entries), nil
+}
+
+func (s *PayoutService) ListPayoutReviewAuditLogs(ctx context.Context, payoutNo string, limit int) ([]PayoutReviewAuditView, error) {
+	entries, err := s.store.ListPayoutReviewAuditLogs(ctx, strings.TrimSpace(payoutNo), limit)
+	if err != nil {
+		return nil, err
+	}
+	return buildPayoutReviewAuditViews(entries), nil
+}
+
+func (s *PayoutService) ListPayoutOperationalAlerts(ctx context.Context, status string, limit int) ([]PayoutOperationalAlertView, error) {
+	alerts, err := s.store.ListPayoutOperationalAlerts(ctx, strings.TrimSpace(status), limit)
+	if err != nil {
+		return nil, err
+	}
+	return buildPayoutOperationalAlertViews(alerts), nil
+}
+
+func (s *PayoutService) ResolvePayoutOperationalAlert(ctx context.Context, alertID int64, auditCtx PayoutReviewAuditContext) error {
+	if alertID == 0 {
+		return errors.New("alert_id is required")
+	}
+	if strings.TrimSpace(auditCtx.Actor) == "" {
+		return errors.New("actor is required")
+	}
+	if strings.TrimSpace(auditCtx.Reason) == "" {
+		return errors.New("review reason is required")
+	}
+	return s.store.ResolvePayoutOperationalAlert(ctx, alertID, repository.PayoutOperationalAlertResolve{
+		ResolvedBy:    strings.TrimSpace(auditCtx.Actor),
+		ResolveReason: strings.TrimSpace(auditCtx.Reason),
+	})
+}
+
+func (s *PayoutService) RotateMerchantAPIKey(ctx context.Context, merchantCode string, req RotateMerchantAPIKeyRequest, auditCtx MerchantAPIKeyAuditContext) ([]MerchantAPIKeyView, error) {
 	expiresAt, err := parseOptionalRFC3339Time(req.ExpiresAt)
 	if err != nil {
 		return nil, err
 	}
-	records, err := s.store.RotateMerchantAPIKey(ctx, strings.TrimSpace(merchantCode), req.APIKey, expiresAt)
+	previousExpiresAt, err := parseOptionalRFC3339Time(req.PreviousExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	records, err := s.store.RotateMerchantAPIKey(
+		ctx,
+		strings.TrimSpace(merchantCode),
+		req.APIKey,
+		expiresAt,
+		previousExpiresAt,
+		buildMerchantAPIKeyAuditLog(req.APIKey, req.Reason, expiresAt, previousExpiresAt, auditCtx),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -261,13 +615,60 @@ func (s *PayoutService) RotateMerchantAPIKey(ctx context.Context, merchantCode s
 	return buildMerchantAPIKeyViews(records), nil
 }
 
-func (s *PayoutService) RevokeMerchantAPIKey(ctx context.Context, merchantCode string, req RevokeMerchantAPIKeyRequest) ([]MerchantAPIKeyView, error) {
-	records, err := s.store.RevokeMerchantAPIKey(ctx, strings.TrimSpace(merchantCode), req.APIKey)
+func (s *PayoutService) IssueMerchantAPIKey(ctx context.Context, merchantCode string, req IssueMerchantAPIKeyRequest, auditCtx MerchantAPIKeyAuditContext) (IssuedMerchantAPIKeyView, error) {
+	expiresAt, err := parseOptionalRFC3339Time(req.ExpiresAt)
+	if err != nil {
+		return IssuedMerchantAPIKeyView{}, err
+	}
+	previousExpiresAt, err := parseOptionalRFC3339Time(req.PreviousExpiresAt)
+	if err != nil {
+		return IssuedMerchantAPIKeyView{}, err
+	}
+	apiKey, err := repository.GenerateMerchantAPIKey()
+	if err != nil {
+		return IssuedMerchantAPIKeyView{}, err
+	}
+	records, err := s.store.IssueMerchantAPIKey(
+		ctx,
+		strings.TrimSpace(merchantCode),
+		apiKey,
+		expiresAt,
+		previousExpiresAt,
+		buildMerchantAPIKeyAuditLog(apiKey, req.Reason, expiresAt, previousExpiresAt, auditCtx),
+	)
+	if err != nil {
+		return IssuedMerchantAPIKeyView{}, err
+	}
+	s.setMerchantSigningSecret(merchantCode, apiKey)
+	return IssuedMerchantAPIKeyView{
+		APIKey: apiKey,
+		Keys:   buildMerchantAPIKeyViews(records),
+	}, nil
+}
+
+func (s *PayoutService) RevokeMerchantAPIKey(ctx context.Context, merchantCode string, req RevokeMerchantAPIKeyRequest, auditCtx MerchantAPIKeyAuditContext) ([]MerchantAPIKeyView, error) {
+	records, err := s.store.RevokeMerchantAPIKey(
+		ctx,
+		strings.TrimSpace(merchantCode),
+		req.APIKey,
+		buildMerchantAPIKeyAuditLog(req.APIKey, req.Reason, nil, nil, auditCtx),
+	)
 	if err != nil {
 		return nil, err
 	}
 	s.clearMerchantSigningSecretIfMatch(merchantCode, req.APIKey)
 	return buildMerchantAPIKeyViews(records), nil
+}
+
+func (s *PayoutService) ResolveMerchantCallbackSigningKey(ctx context.Context, merchantCode string) (repository.CallbackSigningKey, error) {
+	if s.callbackSigningKeys == nil {
+		return repository.CallbackSigningKey{}, errors.New("merchant callback signing key resolver is unavailable")
+	}
+	merchant, err := s.store.FindMerchantByCode(ctx, strings.TrimSpace(merchantCode))
+	if err != nil {
+		return repository.CallbackSigningKey{}, err
+	}
+	return s.callbackSigningKeys.ResolveCurrentCallbackSigningKey(ctx, merchant.ID)
 }
 
 func (s *PayoutService) HandleGatewayCallback(ctx context.Context, req providerGateway.PayoutCallbackRequest) (domain.PayoutOrder, bool, error) {
@@ -304,11 +705,17 @@ func (s *PayoutService) ReconcilePendingPayouts(ctx context.Context, limit int) 
 	for _, order := range orders {
 		if order.Status == domain.PayoutOrderStatusApproved {
 			if _, err := s.dispatchApprovedPayout(ctx, order); err != nil {
+				_ = s.raisePayoutOperationalAlert(ctx, order, "dispatch_failed", "critical", "approved payout dispatch failed", err.Error())
 				continue
 			}
 			continue
 		}
 		if _, err := s.refreshPayoutStatus(ctx, order); err != nil {
+			_ = s.raisePayoutOperationalAlert(ctx, order, "reconcile_failed", "warning", "payout reconcile query failed", err.Error())
+			continue
+		}
+		if s.now().Sub(order.UpdatedAt) >= 10*time.Minute {
+			_ = s.raisePayoutOperationalAlert(ctx, order, "reconcile_stuck", "warning", "payout remains in non-terminal status beyond reconcile threshold", fmt.Sprintf("status=%s updated_at=%s", order.Status, order.UpdatedAt.Format(time.RFC3339)))
 			continue
 		}
 	}
@@ -316,33 +723,54 @@ func (s *PayoutService) ReconcilePendingPayouts(ctx context.Context, limit int) 
 }
 
 func (s *PayoutService) RetryMerchantCallbacks(ctx context.Context, limit int) error {
-	tasks, err := s.store.ListDueMerchantPayoutCallbackTasks(ctx, s.now(), limit)
+	now := s.now()
+	tasks, err := s.store.ClaimDueMerchantPayoutCallbackTasks(ctx, now, now.Add(-2*time.Minute), limit)
 	if err != nil {
 		return err
 	}
 	for _, task := range tasks {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, task.CallbackURL, bytes.NewReader([]byte(task.Payload)))
-		if err != nil {
-			_ = s.store.MarkMerchantPayoutCallbackTaskResult(ctx, task.ID, false, nextRetryTime(task.RetryCount), err.Error())
+		if s.callbackSigningKeys == nil {
+			_ = s.store.MarkMerchantPayoutCallbackTaskResult(ctx, task.ID, task.ClaimToken, false, nextRetryTime(task.RetryCount), "callback_signing_key_unavailable")
+			s.raisePayoutAlertFromTask(ctx, task, "merchant_callback_failed", "warning", "merchant payout callback signing key unavailable", "callback_signing_key_unavailable")
 			continue
 		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := s.httpClient.Do(req)
+		key, keyErr := s.callbackSigningKeys.ResolveCurrentCallbackSigningKey(ctx, task.MerchantID)
+		if keyErr != nil {
+			_ = s.store.MarkMerchantPayoutCallbackTaskResult(ctx, task.ID, task.ClaimToken, false, nextRetryTime(task.RetryCount), "callback_signing_key_unavailable")
+			s.raisePayoutAlertFromTask(ctx, task, "merchant_callback_failed", "warning", "merchant payout callback signing key unavailable", "callback_signing_key_unavailable")
+			continue
+		}
+		headers, headerErr := BuildMerchantCallbackHeaders(key, http.MethodPost, task.CallbackURL, []byte(task.Payload), now)
+		if headerErr != nil {
+			_ = s.store.MarkMerchantPayoutCallbackTaskResult(ctx, task.ID, task.ClaimToken, false, nextRetryTime(task.RetryCount), "callback_signing_header_build_failed")
+			s.raisePayoutAlertFromTask(ctx, task, "merchant_callback_failed", "warning", "merchant payout callback signing header failed", "callback_signing_header_build_failed")
+			continue
+		}
+		resp, err := s.postPublicPayoutCallback(ctx, task.CallbackURL, []byte(task.Payload), headers)
 		if err != nil {
-			_ = s.store.MarkMerchantPayoutCallbackTaskResult(ctx, task.ID, false, nextRetryTime(task.RetryCount), err.Error())
+			_ = s.store.MarkMerchantPayoutCallbackTaskResult(ctx, task.ID, task.ClaimToken, false, nextRetryTime(task.RetryCount), err.Error())
+			s.raisePayoutAlertFromTask(ctx, task, "merchant_callback_failed", "warning", "merchant payout callback delivery failed", err.Error())
 			continue
 		}
 		body := new(bytes.Buffer)
-		_, _ = body.ReadFrom(resp.Body)
+		_, _ = body.ReadFrom(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
-		success := resp.StatusCode >= 200 && resp.StatusCode < 300 && strings.EqualFold(strings.TrimSpace(body.String()), "OK")
+		success := isSuccessfulMerchantCallbackResponse(resp.StatusCode, body.Bytes())
 		if success {
-			_ = s.store.MarkMerchantPayoutCallbackTaskResult(ctx, task.ID, true, time.Time{}, "")
+			_ = s.store.MarkMerchantPayoutCallbackTaskResult(ctx, task.ID, task.ClaimToken, true, time.Time{}, "")
 			continue
 		}
-		_ = s.store.MarkMerchantPayoutCallbackTaskResult(ctx, task.ID, false, nextRetryTime(task.RetryCount), fmt.Sprintf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(body.String())))
+		errMessage := fmt.Sprintf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(body.String()))
+		_ = s.store.MarkMerchantPayoutCallbackTaskResult(ctx, task.ID, task.ClaimToken, false, nextRetryTime(task.RetryCount), errMessage)
+		s.raisePayoutAlertFromTask(ctx, task, "merchant_callback_failed", "warning", "merchant payout callback delivery failed", errMessage)
 	}
 	return nil
+}
+
+// postPublicPayoutCallback resolves once, rejects non-public IPs, then dials
+// that exact address. This prevents DNS rebinding and blocks redirects.
+func (s *PayoutService) postPublicPayoutCallback(ctx context.Context, rawURL string, body []byte, headers map[string][]string) (*http.Response, error) {
+	return PostPublicHTTPSCallback(ctx, rawURL, body, 10*time.Second, headers)
 }
 
 func (s *PayoutService) dispatchApprovedPayout(ctx context.Context, order domain.PayoutOrder) (domain.PayoutOrder, error) {
@@ -359,7 +787,7 @@ func (s *PayoutService) dispatchApprovedPayout(ctx context.Context, order domain
 		PayValidateID:    order.PayValidateID,
 		PayCurrency:      order.PayCurrency,
 	}
-	requestJSON := mustJSON(requestPayload)
+	requestJSON := redactPayoutRequestJSON(requestPayload)
 	result, err := s.client.CreatePayout(ctx, requestPayload)
 	if err != nil {
 		attempt := domain.PayoutTransaction{
@@ -424,6 +852,9 @@ func (s *PayoutService) enqueueMerchantCallback(ctx context.Context, order domai
 	if strings.TrimSpace(order.CallbackURL) == "" {
 		return nil
 	}
+	if err := validatePayoutCallbackURL(order.CallbackURL); err != nil {
+		return err
+	}
 	merchant, err := s.store.FindMerchantByCode(ctx, order.MerchantCode)
 	if err != nil {
 		return err
@@ -438,23 +869,7 @@ func (s *PayoutService) enqueueMerchantCallback(ctx context.Context, order domai
 		"fee":                formatDecimal(order.FeeCents),
 		"currency":           order.Currency,
 		"completed_at":       formatTimePointer(order.CompletedAt),
-		"sign":               "",
-	}
-	if secret := s.merchantSigningSecret(merchant); secret != "" {
-		sign, signErr := providerGateway.Sign(map[string]any{
-			"merchant_id":        merchant.Code,
-			"merchant_payout_no": order.MerchantPayoutNo,
-			"payout_no":          order.PayoutNo,
-			"provider_order_no":  order.ProviderOrderNo,
-			"status":             string(order.Status),
-			"amount":             formatDecimal(order.AmountCents),
-			"fee":                formatDecimal(order.FeeCents),
-			"currency":           order.Currency,
-			"completed_at":       formatTimePointer(order.CompletedAt),
-		}, secret)
-		if signErr == nil {
-			payloadMap["sign"] = sign
-		}
+		"event":              "payout_result",
 	}
 	payload, err := json.Marshal(payloadMap)
 	if err != nil {
@@ -495,8 +910,14 @@ func (s *PayoutService) authenticateMerchant(ctx context.Context, merchantCode, 
 	return domain.Merchant{}, ErrMerchantAuthFailed
 }
 
-func (s *PayoutService) merchantSigningSecret(merchant domain.Merchant) string {
+func (s *PayoutService) resolveMerchantRequestSigningSecret(ctx context.Context, merchant domain.Merchant) string {
 	if secret := strings.TrimSpace(s.merchantSecrets[strings.TrimSpace(merchant.Code)]); secret != "" {
+		return secret
+	}
+	if secret, err := s.store.GetActiveMerchantAPIKeySecret(ctx, merchant.ID); err == nil && strings.TrimSpace(secret) != "" {
+		return strings.TrimSpace(secret)
+	}
+	if secret := strings.TrimSpace(merchant.APISecret); secret != "" {
 		return secret
 	}
 	if repositoryLooksLikeStoredHash(merchant.APIKey) {
@@ -526,6 +947,33 @@ func (s *PayoutService) clearMerchantSigningSecretIfMatch(merchantCode, apiKey s
 	if strings.TrimSpace(s.merchantSecrets[merchantCode]) == apiKey {
 		delete(s.merchantSecrets, merchantCode)
 	}
+}
+
+func validatePayoutCallbackURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return errors.New("callback_url must be an absolute HTTP(S) URL")
+	}
+	if parsed.Scheme != "https" {
+		return errors.New("callback_url must use HTTPS")
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return errors.New("callback_url host is required")
+	}
+	if strings.EqualFold(host, "localhost") {
+		return errors.New("callback_url must not target localhost")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() {
+			return errors.New("callback_url must not target a private or loopback address")
+		}
+	}
+	return nil
 }
 
 func buildPayoutNo(merchantPayoutNo string) string {
@@ -559,29 +1007,17 @@ func parseAmountToCents(value string) (int64, error) {
 	if negative {
 		return 0, errors.New("amount must be greater than zero")
 	}
-	parts := strings.SplitN(value, ".", 3)
-	if len(parts) > 2 {
-		return 0, errors.New("invalid amount")
+	if strings.Contains(value, ".") {
+		return 0, errors.New("amount must be a whole TWD amount")
 	}
-	whole, err := strconv.ParseInt(parts[0], 10, 64)
+	whole, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
 		return 0, errors.New("invalid amount")
 	}
-	var cents int64
-	if len(parts) == 2 {
-		fraction := parts[1]
-		if len(fraction) > 2 {
-			fraction = fraction[:2]
-		}
-		for len(fraction) < 2 {
-			fraction += "0"
-		}
-		cents, err = strconv.ParseInt(fraction, 10, 64)
-		if err != nil {
-			return 0, errors.New("invalid amount")
-		}
+	if whole > (1<<63-1)/100 {
+		return 0, errors.New("amount is too large")
 	}
-	total := whole*100 + cents
+	total := whole * 100
 	if total <= 0 {
 		return 0, errors.New("amount must be greater than zero")
 	}
@@ -682,6 +1118,46 @@ func payoutEventKey(req providerGateway.PayoutCallbackRequest) string {
 	}, "|")
 }
 
+func redactPayoutRequestJSON(req providerGateway.CreatePayoutRequest) string {
+	req.PayAccountName = maskLeadingPreserveTail(req.PayAccountName, 0, 1)
+	req.PayCardNo = maskLeadingPreserveTail(req.PayCardNo, 0, 4)
+	req.PayValidateID = maskLeadingPreserveTail(req.PayValidateID, 0, 4)
+	return mustJSON(req)
+}
+
+func maskLeadingPreserveTail(value string, keepPrefix, keepSuffix int) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	if keepPrefix < 0 {
+		keepPrefix = 0
+	}
+	if keepSuffix < 0 {
+		keepSuffix = 0
+	}
+	if keepPrefix+keepSuffix >= len(runes) {
+		if len(runes) <= 2 {
+			return strings.Repeat("*", len(runes))
+		}
+		keepPrefix = 1
+		keepSuffix = 1
+	}
+	var b strings.Builder
+	for idx, r := range runes {
+		switch {
+		case idx < keepPrefix:
+			b.WriteRune(r)
+		case idx >= len(runes)-keepSuffix:
+			b.WriteRune(r)
+		default:
+			b.WriteByte('*')
+		}
+	}
+	return b.String()
+}
+
 func BuildPayoutOrderView(order domain.PayoutOrder) PayoutOrderView {
 	return PayoutOrderView{
 		PayoutNo:         order.PayoutNo,
@@ -718,4 +1194,254 @@ func buildMerchantAPIKeyViews(records []repository.MerchantAPIKeyRecord) []Merch
 		})
 	}
 	return views
+}
+
+func buildMerchantAPIKeyAuditLog(apiKey, reason string, expiresAt, previousExpiresAt *time.Time, auditCtx MerchantAPIKeyAuditContext) repository.MerchantAPIKeyAuditLog {
+	metadata := map[string]any{}
+	if expiresAt != nil {
+		metadata["expires_at"] = expiresAt.Format(time.RFC3339)
+	}
+	if previousExpiresAt != nil {
+		metadata["previous_expires_at"] = previousExpiresAt.Format(time.RFC3339)
+	}
+	if len(auditCtx.ActorRoles) > 0 {
+		metadata["actor_roles"] = append([]string(nil), auditCtx.ActorRoles...)
+	}
+	if strings.TrimSpace(auditCtx.Checker) != "" {
+		metadata["checker"] = strings.TrimSpace(auditCtx.Checker)
+	}
+	if len(auditCtx.CheckerRoles) > 0 {
+		metadata["checker_roles"] = append([]string(nil), auditCtx.CheckerRoles...)
+	}
+	return repository.MerchantAPIKeyAuditLog{
+		KeyHash:   hashAuditAPIKey(apiKey),
+		Actor:     strings.TrimSpace(auditCtx.Actor),
+		Reason:    strings.TrimSpace(reason),
+		RequestID: strings.TrimSpace(auditCtx.RequestID),
+		SourceIP:  strings.TrimSpace(auditCtx.SourceIP),
+		UserAgent: strings.TrimSpace(auditCtx.UserAgent),
+		Metadata:  metadata,
+	}
+}
+
+func buildMerchantAPIKeyAuditViews(entries []repository.MerchantAPIKeyAuditEntry) []MerchantAPIKeyAuditView {
+	views := make([]MerchantAPIKeyAuditView, 0, len(entries))
+	for _, entry := range entries {
+		view := MerchantAPIKeyAuditView{
+			Action:           entry.Action,
+			KeyHash:          entry.KeyHash,
+			Actor:            entry.Actor,
+			Reason:           entry.Reason,
+			RequestID:        entry.RequestID,
+			SourceIP:         entry.SourceIP,
+			UserAgent:        entry.UserAgent,
+			CreatedAt:        entry.CreatedAt,
+			MerchantAPIKeyID: entry.MerchantAPIKeyID,
+		}
+		if strings.TrimSpace(entry.Metadata) != "" {
+			var metadata map[string]any
+			if err := json.Unmarshal([]byte(entry.Metadata), &metadata); err == nil && len(metadata) > 0 {
+				view.Metadata = metadata
+			}
+		}
+		views = append(views, view)
+	}
+	return views
+}
+
+func buildPayoutReviewAuditLog(action string, auditCtx PayoutReviewAuditContext, metadata map[string]any) repository.PayoutReviewAuditLog {
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	if len(auditCtx.ActorRoles) > 0 {
+		metadata["actor_roles"] = append([]string(nil), auditCtx.ActorRoles...)
+	}
+	if strings.TrimSpace(auditCtx.Checker) != "" {
+		metadata["checker"] = strings.TrimSpace(auditCtx.Checker)
+	}
+	if len(auditCtx.CheckerRoles) > 0 {
+		metadata["checker_roles"] = append([]string(nil), auditCtx.CheckerRoles...)
+	}
+	return repository.PayoutReviewAuditLog{
+		Action:    strings.TrimSpace(action),
+		Actor:     strings.TrimSpace(auditCtx.Actor),
+		Reason:    strings.TrimSpace(auditCtx.Reason),
+		RequestID: strings.TrimSpace(auditCtx.RequestID),
+		SourceIP:  strings.TrimSpace(auditCtx.SourceIP),
+		UserAgent: strings.TrimSpace(auditCtx.UserAgent),
+		Metadata:  metadata,
+	}
+}
+
+func buildPayoutReviewAuditViews(entries []repository.PayoutReviewAuditEntry) []PayoutReviewAuditView {
+	views := make([]PayoutReviewAuditView, 0, len(entries))
+	for _, entry := range entries {
+		view := PayoutReviewAuditView{
+			Action:        entry.Action,
+			Actor:         entry.Actor,
+			Reason:        entry.Reason,
+			RequestID:     entry.RequestID,
+			SourceIP:      entry.SourceIP,
+			UserAgent:     entry.UserAgent,
+			CreatedAt:     entry.CreatedAt,
+			MerchantID:    entry.MerchantID,
+			PayoutOrderID: entry.PayoutOrderID,
+		}
+		if strings.TrimSpace(entry.Metadata) != "" {
+			var metadata map[string]any
+			if err := json.Unmarshal([]byte(entry.Metadata), &metadata); err == nil && len(metadata) > 0 {
+				view.Metadata = metadata
+			}
+		}
+		views = append(views, view)
+	}
+	return views
+}
+
+func buildPayoutOperationalAlertViews(alerts []domain.PayoutOperationalAlert) []PayoutOperationalAlertView {
+	views := make([]PayoutOperationalAlertView, 0, len(alerts))
+	for _, alert := range alerts {
+		views = append(views, PayoutOperationalAlertView{
+			ID:              alert.ID,
+			MerchantID:      alert.MerchantID,
+			PayoutOrderID:   alert.PayoutOrderID,
+			PayoutNo:        alert.PayoutNo,
+			Category:        alert.Category,
+			Severity:        alert.Severity,
+			Status:          alert.Status,
+			Summary:         alert.Summary,
+			Details:         alert.Details,
+			OccurrenceCount: alert.OccurrenceCount,
+			FirstOccurredAt: alert.FirstOccurredAt,
+			LastOccurredAt:  alert.LastOccurredAt,
+			ResolvedAt:      alert.ResolvedAt,
+			ResolvedBy:      alert.ResolvedBy,
+			ResolveReason:   alert.ResolveReason,
+		})
+	}
+	return views
+}
+
+func (s *PayoutService) BuildPayoutSettlementReport(ctx context.Context) (PayoutSettlementReportView, error) {
+	snapshot, err := s.store.BuildPayoutSettlementSnapshot(ctx)
+	if err != nil {
+		return PayoutSettlementReportView{}, err
+	}
+	if s.client == nil {
+		return PayoutSettlementReportView{}, errors.New("payout gateway client is not configured")
+	}
+	balance, err := s.client.QueryBalance(ctx, providerGateway.BalanceRequest{})
+	if err != nil {
+		return PayoutSettlementReportView{}, err
+	}
+	var providerBalanceCents int64
+	var providerAvailableCents int64
+	var providerUnsettlementCents int64
+	if balance.Data != nil {
+		balanceValue := strings.TrimSpace(balance.Data.Balance)
+		if balanceValue == "" {
+			balanceValue = strings.TrimSpace(balance.Data.BalanceOriginal)
+		}
+		providerBalanceCents, err = parseAmountToCents(balanceValue)
+		if err != nil {
+			providerBalanceCents = 0
+		}
+		providerAvailableCents, err = parseAmountToCents(balance.Data.BalanceAvailable)
+		if err != nil {
+			providerAvailableCents = 0
+		}
+		providerUnsettlementCents, err = parseAmountToCents(balance.Data.BalanceUnsettlement)
+		if err != nil {
+			providerUnsettlementCents = 0
+		}
+	}
+
+	report := PayoutSettlementReportView{
+		GeneratedAt: snapshot.GeneratedAt,
+		CustomerID:  s.client.CustomerID(),
+		Currencies:  make([]PayoutSettlementCurrencyView, 0, len(snapshot.Currencies)),
+	}
+	for _, currency := range snapshot.Currencies {
+		view := PayoutSettlementCurrencyView{
+			Currency:                    currency.Currency,
+			MerchantAvailableCents:      currency.MerchantAvailableCents,
+			MerchantPendingCents:        currency.MerchantPendingCents,
+			PendingReviewCents:          currency.PendingReviewCents,
+			ApprovedCents:               currency.ApprovedCents,
+			SubmittingCents:             currency.SubmittingCents,
+			ProcessingCents:             currency.ProcessingCents,
+			CompletedCents:              currency.CompletedCents,
+			FailedCents:                 currency.FailedCents,
+			CancelledOrRejectedCents:    currency.CancelledOrRejectedCents,
+			ReversedCents:               currency.ReversedCents,
+			OpenOrderCount:              currency.OpenOrderCount,
+			ProviderInFlightCents:       currency.ProviderInFlightCents,
+			InternalManualHoldCents:     currency.InternalManualHoldCents,
+			InternalTotalUnsettledCents: currency.InternalTotalUnsettledCents,
+		}
+		if strings.EqualFold(currency.Currency, "TWD") {
+			view.ProviderBalanceCents = providerBalanceCents
+			view.ProviderAvailableCents = providerAvailableCents
+			view.ProviderUnsettlementCents = providerUnsettlementCents
+			view.ProviderVsInflightGapCents = providerUnsettlementCents - currency.ProviderInFlightCents
+			view.MerchantPendingGapCents = currency.MerchantPendingCents - currency.InternalTotalUnsettledCents
+		}
+		report.Currencies = append(report.Currencies, view)
+	}
+	return report, nil
+}
+
+func (s *PayoutService) raisePayoutOperationalAlert(ctx context.Context, order domain.PayoutOrder, category, severity, summary, details string) error {
+	if strings.TrimSpace(order.PayoutNo) == "" {
+		return nil
+	}
+	err := s.store.UpsertPayoutOperationalAlert(ctx, order.PayoutNo, repository.PayoutOperationalAlertUpsert{
+		MerchantID:    order.MerchantID,
+		PayoutOrderID: order.ID,
+		Category:      strings.TrimSpace(category),
+		Severity:      strings.TrimSpace(severity),
+		Summary:       strings.TrimSpace(summary),
+		Details:       strings.TrimSpace(details),
+	})
+	if err != nil || s.alertNotifier == nil {
+		return err
+	}
+	alerts, listErr := s.store.ListPayoutOperationalAlerts(ctx, "open", 100)
+	if listErr != nil {
+		return nil
+	}
+	for _, alert := range alerts {
+		if alert.PayoutNo == order.PayoutNo && alert.Category == category {
+			// The database keeps every recurrence count, while the external
+			// notifier only receives the first occurrence of an open incident.
+			if alert.OccurrenceCount == 1 {
+				_ = s.alertNotifier.Notify(ctx, alert)
+			}
+			break
+		}
+	}
+	return nil
+}
+
+func findPayoutNoFromTaskPayload(payload string) string {
+	var body map[string]any
+	if err := json.Unmarshal([]byte(payload), &body); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", body["payout_no"]))
+}
+
+func (s *PayoutService) raisePayoutAlertFromTask(ctx context.Context, task domain.MerchantPayoutCallbackTask, category, severity, summary, details string) {
+	payoutNo := findPayoutNoFromTaskPayload(task.Payload)
+	if strings.TrimSpace(payoutNo) == "" {
+		return
+	}
+	if order, err := s.store.FindPayoutOrderByPayoutNo(ctx, payoutNo); err == nil {
+		_ = s.raisePayoutOperationalAlert(ctx, order, category, severity, summary, details)
+	}
+}
+
+func hashAuditAPIKey(apiKey string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(apiKey)))
+	return hex.EncodeToString(sum[:])
 }

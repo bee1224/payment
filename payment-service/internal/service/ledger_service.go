@@ -7,14 +7,6 @@ import (
 	"payment-service/internal/domain"
 )
 
-const (
-	LedgerTypeDeposit        = "deposit"
-	LedgerTypePayoutHold     = "payout_hold"
-	LedgerTypePayoutComplete = "payout_complete"
-	LedgerTypePayoutRelease  = "payout_release"
-	LedgerTypePayoutReturn   = "payout_return"
-)
-
 type LedgerService struct {
 	mu      sync.Mutex
 	nextID  int64
@@ -27,14 +19,17 @@ func NewLedgerService() *LedgerService {
 
 func (s *LedgerService) RecordDeposit(order domain.DepositOrder) (domain.LedgerEntry, error) {
 	entry := domain.LedgerEntry{
-		MerchantID:  order.MerchantID,
-		OrderID:     order.ID,
-		OrderNo:     order.OrderNo,
-		AmountCents: order.AmountCents,
-		Direction:   "credit",
-		Type:        LedgerTypeDeposit,
-		Currency:    order.Currency,
-		CreatedAt:   time.Now(),
+		MerchantID:    order.MerchantID,
+		OrderID:       order.ID,
+		OrderNo:       order.OrderNo,
+		AmountCents:   order.AmountCents,
+		Direction:     domain.LedgerDirectionCredit,
+		Type:          domain.LedgerEntryTypeDepositPaid,
+		Currency:      order.Currency,
+		ReferenceType: domain.LedgerReferenceTypeOrder,
+		ReferenceID:   order.ID,
+		SourceEvent:   domain.LedgerSourceEventDepositPaid,
+		CreatedAt:     time.Now(),
 	}
 	return s.Record(entry)
 }

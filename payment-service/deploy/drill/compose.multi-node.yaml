@@ -1,0 +1,60 @@
+# Isolated multi-node failure drill. Use an ephemeral project name and .env.drill;
+# never point DATABASE_DSN at production or map these ports publicly.
+x-api-template: &api
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    environment:
+      APP_ENV: drill
+      APP_PORT: 8080
+      DATABASE_DSN: payment_app:${MYSQL_PASSWORD}@tcp(mysql:3306)/payment_service?parseTime=true
+      MERCHANT_SECRET_ENCRYPTION_KEY: ${MERCHANT_SECRET_ENCRYPTION_KEY}
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET}
+      ADMIN_INITIAL_USERNAME: drill-admin
+      ADMIN_INITIAL_PASSWORD_HASH: ${ADMIN_INITIAL_PASSWORD_HASH}
+      NEWEBPAY_MPG_URL: https://example.invalid/mpg
+      NEWEBPAY_MERCHANT_ID: drill
+      NEWEBPAY_HASH_KEY: drill-key
+      NEWEBPAY_HASH_IV: drill-iv
+      NEWEBPAY_NOTIFY_URL: https://example.invalid/notify
+      NEWEBPAY_RETURN_URL: https://example.invalid/result
+      GATEWAY_BASE_URL: https://example.invalid
+      GATEWAY_CUSTOMER_ID: drill
+      GATEWAY_HMAC_SECRET: ${GATEWAY_HMAC_SECRET}
+      GATEWAY_PAYOUT_NOTIFY_URL: https://example.invalid/payout-callback
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/health >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [drill]
+services:
+  mysql:
+    image: mariadb:10.11
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MARIADB_DATABASE: payment_service
+      MARIADB_USER: payment_app
+      MARIADB_PASSWORD: ${MYSQL_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p$$MARIADB_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [drill]
+  load-balancer:
+    image: nginx:1.27-alpine
+    ports: ["127.0.0.1:18080:80"]
+    volumes:
+      - ./nginx-drill.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on: [api-1, api-2]
+    networks: [drill]
+  api-1:
+    <<: *api
+  api-2:
+    <<: *api
+networks:
+  drill:

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
@@ -12,17 +13,18 @@ import (
 )
 
 type MerchantAPIKeyRecord struct {
-	ID            int64
-	MerchantID    int64
-	KeyHash       string
-	Status        string
-	IsPrimary     bool
-	LastUsedAt    *time.Time
-	LastRotatedAt time.Time
-	ExpiresAt     *time.Time
-	RevokedAt     *time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID               int64
+	MerchantID       int64
+	KeyHash          string
+	SecretCiphertext string
+	Status           string
+	IsPrimary        bool
+	LastUsedAt       *time.Time
+	LastRotatedAt    time.Time
+	ExpiresAt        *time.Time
+	RevokedAt        *time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 func hashMerchantAPIKey(apiKey string) string {
@@ -59,7 +61,7 @@ func merchantAPIKeyMatches(storedSecret, providedAPIKey string) bool {
 	return subtle.ConstantTimeCompare([]byte(storedSecret), []byte(providedAPIKey)) == 1
 }
 
-func syncMerchantAPIKeyTx(ctx context.Context, tx *sql.Tx, merchantID int64, apiKey string) error {
+func syncMerchantAPIKeyTx(ctx context.Context, tx *sql.Tx, merchantID int64, apiKey, secretCiphertext string) error {
 	apiKey = strings.TrimSpace(apiKey)
 	if merchantID == 0 || apiKey == "" {
 		return nil
@@ -74,26 +76,51 @@ func syncMerchantAPIKeyTx(ctx context.Context, tx *sql.Tx, merchantID int64, api
 		return err
 	}
 	if existingCount > 0 {
+		if strings.TrimSpace(secretCiphertext) != "" {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE merchant_api_keys
+				SET secret_ciphertext = CASE
+					WHEN secret_ciphertext IS NULL OR secret_ciphertext = '' THEN ?
+					ELSE secret_ciphertext
+				END,
+				updated_at = CURRENT_TIMESTAMP
+				WHERE merchant_id = ? AND key_hash = ?
+			`, secretCiphertext, merchantID, hashMerchantAPIKey(apiKey)); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
 	keyHash := hashMerchantAPIKey(apiKey)
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO merchant_api_keys (merchant_id, key_hash, status, is_primary, last_rotated_at, revoked_at)
-		VALUES (?, ?, 'active', TRUE, CURRENT_TIMESTAMP, NULL)
+		INSERT INTO merchant_api_keys (merchant_id, key_hash, secret_ciphertext, status, is_primary, last_rotated_at, revoked_at)
+		VALUES (?, ?, ?, 'active', TRUE, CURRENT_TIMESTAMP, NULL)
 		ON DUPLICATE KEY UPDATE
+			secret_ciphertext = CASE
+				WHEN VALUES(secret_ciphertext) IS NULL OR VALUES(secret_ciphertext) = '' THEN secret_ciphertext
+				ELSE VALUES(secret_ciphertext)
+			END,
 			status = 'active',
 			is_primary = TRUE,
 			last_rotated_at = CURRENT_TIMESTAMP,
 			revoked_at = NULL,
 			updated_at = CURRENT_TIMESTAMP
-	`, merchantID, keyHash); err != nil {
+	`, merchantID, keyHash, nullableString(strings.TrimSpace(secretCiphertext))); err != nil {
 		return err
 	}
 	return nil
 }
 
-func insertMerchantAPIKeyTx(ctx context.Context, tx *sql.Tx, merchantID int64, apiKey string, expiresAt *time.Time) error {
+func GenerateMerchantAPIKey() (string, error) {
+	randomBytes := make([]byte, 32)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(randomBytes), nil
+}
+
+func issueMerchantAPIKeyTx(ctx context.Context, tx *sql.Tx, merchantID int64, apiKey, secretCiphertext string, expiresAt, previousExpiresAt *time.Time) error {
 	apiKey = strings.TrimSpace(apiKey)
 	if merchantID == 0 || apiKey == "" {
 		return errors.New("api_key is required")
@@ -101,27 +128,83 @@ func insertMerchantAPIKeyTx(ctx context.Context, tx *sql.Tx, merchantID int64, a
 	keyHash := hashMerchantAPIKey(apiKey)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE merchant_api_keys
-		SET status = 'revoked',
-		    is_primary = FALSE,
-		    revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP),
+		SET is_primary = FALSE,
+		    expires_at = CASE
+		    	WHEN ? IS NULL THEN expires_at
+		    	WHEN revoked_at IS NOT NULL THEN expires_at
+		    	WHEN expires_at IS NULL OR expires_at > ? THEN ?
+		    	ELSE expires_at
+		    END,
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE merchant_id = ?
-		  AND status <> 'revoked'
-	`, merchantID); err != nil {
+		  AND status = 'active'
+		  AND revoked_at IS NULL
+		  AND is_primary = TRUE
+	`, nullableTime(previousExpiresAt), nullableTime(previousExpiresAt), nullableTime(previousExpiresAt), merchantID); err != nil {
 		return err
 	}
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO merchant_api_keys (merchant_id, key_hash, status, is_primary, last_rotated_at, expires_at, revoked_at)
-		VALUES (?, ?, 'active', TRUE, CURRENT_TIMESTAMP, ?, NULL)
+		INSERT INTO merchant_api_keys (merchant_id, key_hash, secret_ciphertext, status, is_primary, last_rotated_at, expires_at, revoked_at)
+		VALUES (?, ?, ?, 'active', TRUE, CURRENT_TIMESTAMP, ?, NULL)
 		ON DUPLICATE KEY UPDATE
+			secret_ciphertext = CASE
+				WHEN VALUES(secret_ciphertext) IS NULL OR VALUES(secret_ciphertext) = '' THEN secret_ciphertext
+				ELSE VALUES(secret_ciphertext)
+			END,
 			status = 'active',
 			is_primary = TRUE,
 			last_rotated_at = CURRENT_TIMESTAMP,
 			expires_at = VALUES(expires_at),
 			revoked_at = NULL,
 			updated_at = CURRENT_TIMESTAMP
-	`, merchantID, keyHash, nullableTime(expiresAt))
+	`, merchantID, keyHash, nullableString(strings.TrimSpace(secretCiphertext)), nullableTime(expiresAt))
 	return err
+}
+
+func findMerchantAPIKeyRecordTx(ctx context.Context, tx *sql.Tx, merchantID int64, apiKey string) (MerchantAPIKeyRecord, error) {
+	apiKey = strings.TrimSpace(apiKey)
+	if merchantID == 0 || apiKey == "" {
+		return MerchantAPIKeyRecord{}, ErrNotFound
+	}
+	keyHash := hashMerchantAPIKey(apiKey)
+
+	var record MerchantAPIKeyRecord
+	var lastUsedAt, expiresAt, revokedAt sql.NullTime
+	err := tx.QueryRowContext(ctx, `
+		SELECT id, merchant_id, key_hash, COALESCE(secret_ciphertext, ''), status, is_primary, last_used_at, last_rotated_at, expires_at, revoked_at, created_at, updated_at
+		FROM merchant_api_keys
+		WHERE merchant_id = ? AND key_hash = ?
+		LIMIT 1
+	`, merchantID, keyHash).Scan(
+		&record.ID,
+		&record.MerchantID,
+		&record.KeyHash,
+		&record.SecretCiphertext,
+		&record.Status,
+		&record.IsPrimary,
+		&lastUsedAt,
+		&record.LastRotatedAt,
+		&expiresAt,
+		&revokedAt,
+		&record.CreatedAt,
+		&record.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return MerchantAPIKeyRecord{}, ErrNotFound
+	}
+	if err != nil {
+		return MerchantAPIKeyRecord{}, err
+	}
+	if lastUsedAt.Valid {
+		record.LastUsedAt = &lastUsedAt.Time
+	}
+	if expiresAt.Valid {
+		record.ExpiresAt = &expiresAt.Time
+	}
+	if revokedAt.Valid {
+		record.RevokedAt = &revokedAt.Time
+	}
+	return record, nil
 }
 
 func revokeMerchantAPIKeyTx(ctx context.Context, tx *sql.Tx, merchantID int64, apiKey string) error {
@@ -155,7 +238,7 @@ func revokeMerchantAPIKeyTx(ctx context.Context, tx *sql.Tx, merchantID int64, a
 
 func listMerchantAPIKeysTx(ctx context.Context, tx *sql.Tx, merchantID int64) ([]MerchantAPIKeyRecord, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, merchant_id, key_hash, status, is_primary, last_used_at, last_rotated_at, expires_at, revoked_at, created_at, updated_at
+		SELECT id, merchant_id, key_hash, COALESCE(secret_ciphertext, ''), status, is_primary, last_used_at, last_rotated_at, expires_at, revoked_at, created_at, updated_at
 		FROM merchant_api_keys
 		WHERE merchant_id = ?
 		ORDER BY is_primary DESC, created_at DESC, id DESC
@@ -173,6 +256,7 @@ func listMerchantAPIKeysTx(ctx context.Context, tx *sql.Tx, merchantID int64) ([
 			&record.ID,
 			&record.MerchantID,
 			&record.KeyHash,
+			&record.SecretCiphertext,
 			&record.Status,
 			&record.IsPrimary,
 			&lastUsedAt,

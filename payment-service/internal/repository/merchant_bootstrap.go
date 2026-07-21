@@ -11,11 +11,13 @@ import (
 )
 
 type MerchantBootstrap struct {
-	Code              string
-	Name              string
-	APIKey            string
-	CallbackURL       string
-	InitialBalanceTWD int64
+	Code                  string
+	Name                  string
+	APIKey                string
+	CallbackSigningKeyID  string
+	CallbackSigningSecret string
+	CallbackURL           string
+	InitialBalanceTWD     int64
 }
 
 func (m MerchantBootstrap) Enabled() bool {
@@ -39,7 +41,7 @@ func (m MerchantBootstrap) Merchant() domain.Merchant {
 	}
 }
 
-func SeedMerchantInDB(ctx context.Context, db *sql.DB, bootstrap MerchantBootstrap) error {
+func SeedMerchantInDB(ctx context.Context, db *sql.DB, bootstrap MerchantBootstrap, secretCipher MerchantSecretCipher) error {
 	if db == nil || !bootstrap.Enabled() {
 		return nil
 	}
@@ -78,7 +80,14 @@ func SeedMerchantInDB(ctx context.Context, db *sql.DB, bootstrap MerchantBootstr
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM merchants WHERE code = ? LIMIT 1`, merchant.Code).Scan(&merchantID); err != nil {
 		return err
 	}
-	if err := syncMerchantAPIKeyTx(ctx, tx, merchantID, merchant.APIKey); err != nil {
+	secretCiphertext := ""
+	if secretCipher.Enabled() {
+		secretCiphertext, err = secretCipher.Encrypt(merchant.APIKey)
+		if err != nil {
+			return err
+		}
+	}
+	if err := syncMerchantAPIKeyTx(ctx, tx, merchantID, merchant.APIKey, secretCiphertext); err != nil {
 		return err
 	}
 

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Project Docs Read"
+  short_description: "優先以最少且最相關的專案文件理解任務"
+  default_prompt: "Use $project-docs-read to inspect only the documentation needed for this task first."
+
+policy:
+  allow_implicit_invocation: true
