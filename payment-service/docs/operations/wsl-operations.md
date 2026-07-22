@@ -39,6 +39,10 @@ curl --fail --silent --show-error https://sandbox-api.nnviopp.com/health
 
 使用 Linux 路徑、正斜線、`curl`、`jq`、OpenSSL 與 Linux `ssh`／`scp`／`rsync`。`.env`、`.env.sandbox`、憑證與部署範本保留在專案原位置，僅可確認存在與權限，不得 `cat`、複製或寫入回報。Bash 腳本須具 executable bit 且使用 LF；執行前可用 `bash -n scripts/*.sh` 驗證語法。
 
+### Local Development Environment Hardening Gap
+
+目前 Workspace 位於 WSL 的 `/mnt/c` 掛載時，Unix mode 可能無法可靠呈現或保存 `chmod 600`。這是本機開發環境的 hardening gap，不代表 Credential sync failed、Sandbox configuration unavailable 或 Sandbox Happy Path blocked；仍須維持 Secret 不輸出與 Git ignore 保護。未來可選擇將含 Secret 的執行目錄移至 WSL Linux filesystem，或啟用 WSL metadata mount；本 runbook 不會因此搬移 Workspace 或修改掛載設定。
+
 ## 工作紀錄
 
 - 2026-07-21：修正 `migrationSourceURL()` 的 Windows／WSL 相容性；Windows drive path 不再依目前 OS 的 volume 判斷，並以標準 file URL escaping 處理空白與非 ASCII 路徑。`go test ./internal/repository`、`go test ./...` 與 `go build -buildvcs=false ./cmd/api` 均通過。

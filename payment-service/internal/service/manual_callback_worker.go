@@ -59,7 +59,7 @@ func (w *ManualCallbackWorker) deliver(ctx context.Context, job domain.ManualCal
 					result := w.engine.Deliver(ctx, domain.CallbackDeliveryRequest{URL: job.CallbackURL, Body: body, Headers: headers})
 					attempt.ResponseStatus = result.HTTPStatus
 					attempt.ResponseBody = result.ResponseSummary
-					if result.HTTPStatus < 200 || result.HTTPStatus > 299 || result.ResponseSummary != "OK" {
+					if result.Error != nil {
 						err = result.Error
 					}
 				}

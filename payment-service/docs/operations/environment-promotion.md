@@ -10,4 +10,4 @@
 | Production Candidate | Sandbox 結果、差異設定、備份、migration 相容性、回滾與 Provider／callback 端點都經審查。 |
 | Production | 使用者明確授權後部署與非真實付款 smoke test。 |
 
-目前：Code／Test closeout 可由程式與測試核對；Sandbox 部署存在但本次未連線複驗；External callback smoke test Pending；因此不是 Production Ready。
+目前：Sandbox Deployment Complete、External Callback Smoke Test Complete、Sandbox Verified。代收已完成 Sandbox 真實付款、Provider Notify、Ledger、Callback、retry 與重複 Notify 冪等驗收；一般代付尚未完成 Provider Sandbox 端對端驗證，Manual Payout 尚未完成完整操作驗收。Production 尚未部署與驗證，Production Ready：否。

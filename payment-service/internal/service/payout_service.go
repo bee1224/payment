@@ -755,7 +755,7 @@ func (s *PayoutService) RetryMerchantCallbacks(ctx context.Context, limit int) e
 		body := new(bytes.Buffer)
 		_, _ = body.ReadFrom(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
-		success := isSuccessfulMerchantCallbackResponse(resp.StatusCode, body.Bytes())
+		success := domain.IsSuccessfulMerchantCallbackResponse(resp.StatusCode, body.Bytes())
 		if success {
 			_ = s.store.MarkMerchantPayoutCallbackTaskResult(ctx, task.ID, task.ClaimToken, true, time.Time{}, "")
 			continue

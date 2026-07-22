@@ -4,6 +4,7 @@
 !.env.development.example
 !.env.production.example
 !.env.sandbox.example
+!deploy/drill/.env.drill.example
 !frontend/.env.example
 config/config.yaml
 .gocache/

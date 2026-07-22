@@ -769,7 +769,7 @@ func (h *DepositHandler) postGatewayDepositCallback(callbackURL string, body []b
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 || strings.TrimSpace(string(respBody)) != "OK" {
+	if !domain.IsSuccessfulMerchantCallbackResponse(resp.StatusCode, respBody) {
 		return fmt.Errorf("callback response was not OK: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return nil

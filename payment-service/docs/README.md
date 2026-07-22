@@ -1,6 +1,6 @@
 # 文件索引
 
-本索引是 Phase 1 Closeout 的現行文件入口。驗證標籤：**Code Verified**（程式／設定核對）、**Test Verified**（測試存在或已執行）、**Sandbox Verified**（既有部署驗收）、**Pending External Smoke Test**、**Production Unverified**、**Historical Record**。
+本索引是 Phase 1 Closeout 與 Milestone 5A 的現行文件入口。驗證標籤：**Code Verified**（程式／設定核對）、**Test Verified**（測試存在或已執行）、**Sandbox Deployment Complete**、**Callback Smoke Test Complete**、**Sandbox Verified**（既有部署驗收）、**Production Unverified**、**Historical Record**。
 
 ## 建議閱讀順序
 

@@ -1,5 +1,7 @@
 # Getting Started
 
+這是 reference merchant 的本機前置說明。完整可複製的代收流程請使用 [Deposit Happy Path](deposit-happy-path.md)；正式平台契約與閱讀順序以 [payment-service 外部文件入口](../../payment-service/docs/external/README.md) 為唯一來源。
+
 ## 前置條件
 
 使用 WSL／Bash、Go 1.22 與 Docker Compose。向平台以受控管道取得 Sandbox API Base URL、Customer ID／Secret、Merchant ID／Secret 與 API Key；絕不使用 Production 值。
@@ -18,12 +20,18 @@ go build ./...
 
 ```bash
 ./scripts/run-callback-receiver.sh
-curl -i http://127.0.0.1:8081/healthz
+curl -i http://127.0.0.1:8281/healthz
 docker compose config --quiet
 docker compose up --build
 ```
 
 正式 Sandbox callback URL 必須是公開 HTTPS，例如 `https://<controlled-host>/callbacks/payment`。不可使用 localhost、private IP、Production 網域或需 VPN 的網址。
+
+Receiver 寫入 `MERCHANT_SANDBOX_RECORDS_PATH`（預設 `var/callback-records.jsonl`）後，必須在同一受控主機或共享持久化 volume 執行下列 CLI；它不呼叫 payment-service，也不開放 HTTP 查詢 endpoint：
+
+```bash
+go run ./cmd/merchant-sandbox callback-status --order-id <merchant-order-id>
+```
 
 ## Client request 範例
 

@@ -2,6 +2,8 @@
 
 ## 公開 HTTPS Receiver
 
+Container、Host bind、Nginx upstream 與公開 endpoint 的 Current Runtime 對照，見 [Service Port & Configuration Registry](../../workspace-docs/infrastructure/service-port-registry.md)。本文件不重複維護 Port 表格。
+
 優先使用由你控制的 Sandbox 網域與 TLS reverse proxy，將公開 HTTPS path 轉送至本機或 Sandbox 主機的 loopback port。Sandbox VPS 目前使用 `127.0.0.1:8281`。例如：
 
 ```text

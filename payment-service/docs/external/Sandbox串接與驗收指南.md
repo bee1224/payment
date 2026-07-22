@@ -1,6 +1,6 @@
 # Sandbox 串接與驗收指南
 
-本指南讓外部系統商以 Sandbox 完成代收、代付與 callback 驗收。Production 憑證、URL、callback URL 與訂單資料不可使用於本流程。
+本指南讓外部系統商以 Sandbox 完成代收與 callback 驗收。一般代付是獨立流程，僅在商戶啟用該功能後依[代付文件](商戶代付介面串接文件.md)執行；Production 憑證、URL、callback URL 與訂單資料不可使用於本流程。完整代收操作順序見 [Sandbox Onboarding](sandbox-onboarding.md)。
 
 ## 取得資料
 
@@ -11,8 +11,9 @@
 1. 依[簽章規格](雜湊訊息驗證碼簽章規格.md)完成 HMAC 產生與驗證。
 2. 呼叫[代收 API](商戶代收介面串接文件.md)建立訂單，以回傳的 `view_url` 導轉付款人完成 Sandbox 付款。
 3. 以 `POST /api/query_transaction` 查詢交易；建單成功不等於付款成功。
-4. 呼叫[代付 API](商戶代付介面串接文件.md)建立及查詢代付；建單成功不等於撥款完成。
-5. 完成下列 callback smoke test。
+4. 完成下列 callback smoke test。
+
+完成本指南的代收 Happy Path 不以一般代付為前置或完成條件。
 
 ## Callback Smoke Test
 

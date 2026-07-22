@@ -6,6 +6,12 @@
 
 ## 已完成
 
+- 2026-07-22：Milestone 6A **Merchant Callback Acceptance Visibility** 完成。merchant-sandbox Sandbox receiver 已部署 `callback-status`，僅保存公開 merchant order ID 與非敏感 acceptance metadata。全新 Fresh-session 訂單已完成建單、pending、真實 NewebPay Sandbox 付款、paid 查單、HMAC／timestamp／signature version、HTTP `200`＋精確 `OK`，並於 30 秒後確認 `received_count=1` 未增加；外部商戶不需要 payment-service internal、DB、task 或 attempt table。此結果不代表 Production Ready。
+- 2026-07-22：Milestone 6 **External Merchant Onboarding Ready** 完成。外部商戶可僅依公開文件與 Sandbox Credential 完成代收 Happy Path；一般代付、Manual Payout、Provider Duplicate Notify 與 Production 不在本驗收範圍。
+- 2026-07-22：Milestone 5 **External Merchant Happy Path Verified** 完成。merchant-sandbox 以 Sandbox-only Credential 與公開 HTTP API 完成代收建單、pending 查單、真實 NewebPay Sandbox 付款、Provider Notify、order／provider transaction=`paid`、單筆 `deposit_paid` ledger、Callback HMAC valid、signature version=`hmac-sha256-v1`、HTTP 2xx＋精確 `OK`、task=`sent`、attempt=`success`；等待 worker interval 與排程緩衝後 attempt 維持 `1`。不代表 Production Ready。
+- 2026-07-22：Milestone 5.1 **Provider Duplicate Notify Idempotency Validation** 記為 **Blocked by unverified Provider resend capability**。不得以手工 HTTP 或偽造 Provider Notify 取代實際 Provider 重送；此項不影響 Milestone 5 完成判定。
+- 2026-07-22：Milestone 6 **External Merchant Onboarding Ready** 文件入口、Credential Guide、可複製代收 Happy Path、Callback 契約與 troubleshooting 已收斂至 `docs/external/README.md`；外部商戶正常流程不需要 payment-service internal、DB 或內部工具。
+- 2026-07-22：Milestone 5A Contract Closure 將代收、一般代付與 Manual Payout 的 Callback 成功條件收斂為 HTTP 2xx 且 response body 原始 bytes 精確為 ASCII `OK`；前後空白、換行、大小寫差異與其他 body 均進入失敗／重送路徑。此為程式與文件契約修正，不是新的代付或 Production 驗收。
 - 2026-07-21：修正代收文件的 `pay_apply_date` 為 Unix timestamp（秒）契約。
 - 2026-07-21：補齊對外 Sandbox 串接、callback smoke test、錯誤碼與重試處理文件。
 - 2026-07-21：加入終態代收訂單缺少 callback task 時的 recovery；同一 event key 會冪等補建 outbox，避免 post-commit task 寫入失敗造成永久漏送。

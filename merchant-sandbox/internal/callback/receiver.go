@@ -31,6 +31,7 @@ type Receiver struct {
 }
 
 type acceptanceRecord struct {
+	MerchantOrderID      string `json:"merchant_order_id,omitempty"`
 	ReceivedAt           string `json:"received_at"`
 	Method               string `json:"method"`
 	Path                 string `json:"path"`
@@ -42,8 +43,15 @@ type acceptanceRecord struct {
 	SignatureFingerprint string `json:"signature_fingerprint"`
 	BodySHA256           string `json:"body_sha256"`
 	HMACValid            bool   `json:"hmac_valid"`
+	TimestampValid       bool   `json:"timestamp_valid"`
+	NonceReplayDetected  bool   `json:"nonce_replay_detected"`
 	Response             string `json:"response_mode"`
 	HTTPStatus           int    `json:"http_status"`
+	ResponseBodyExactOK  bool   `json:"response_body_is_exact_ok"`
+}
+
+type callbackPayloadMetadata struct {
+	OrderID string `json:"order_id"`
 }
 
 func New(c Config) *Receiver {
@@ -96,7 +104,10 @@ func (r *Receiver) appendAcceptanceRecord(q *http.Request, body []byte, status i
 		return
 	}
 	hash := sha256.Sum256(body)
+	var payload callbackPayloadMetadata
+	_ = json.Unmarshal(body, &payload)
 	record := acceptanceRecord{
+		MerchantOrderID:      strings.TrimSpace(payload.OrderID),
 		ReceivedAt:           r.now().UTC().Format(time.RFC3339Nano),
 		Method:               q.Method,
 		Path:                 q.URL.Path,
@@ -108,8 +119,11 @@ func (r *Receiver) appendAcceptanceRecord(q *http.Request, body []byte, status i
 		SignatureFingerprint: fingerprintHeader(q.Header.Get("X-Callback-Signature")),
 		BodySHA256:           hex.EncodeToString(hash[:]),
 		HMACValid:            true,
+		TimestampValid:       true,
+		NonceReplayDetected:  false,
 		Response:             r.config.ResponseMode,
 		HTTPStatus:           status,
+		ResponseBodyExactOK:  r.config.ResponseMode == "success" || r.config.ResponseMode == "timeout",
 	}
 	encoded, err := json.Marshal(record)
 	if err != nil {

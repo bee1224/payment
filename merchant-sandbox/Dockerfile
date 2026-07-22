@@ -9,5 +9,5 @@ RUN adduser -D -u 10001 merchant
 USER merchant
 WORKDIR /app
 COPY --from=build /merchant-sandbox /usr/local/bin/merchant-sandbox
-EXPOSE 8081
+EXPOSE 8281
 ENTRYPOINT ["merchant-sandbox"]

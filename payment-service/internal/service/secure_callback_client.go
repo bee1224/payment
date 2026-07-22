@@ -53,15 +53,11 @@ func (e PublicHTTPSCallbackDeliveryEngine) Deliver(ctx context.Context, request 
 			result.ErrorCode, result.Retryable = "http_5xx", true
 		}
 		result.Error = errors.New("callback returned non-2xx status")
-	} else if !isSuccessfulMerchantCallbackResponse(resp.StatusCode, body) {
+	} else if !domain.IsSuccessfulMerchantCallbackResponse(resp.StatusCode, body) {
 		result.ErrorCode, result.Retryable = "response_not_ok", true
 		result.Error = errors.New("callback response was not OK")
 	}
 	return result
-}
-
-func isSuccessfulMerchantCallbackResponse(status int, body []byte) bool {
-	return status >= http.StatusOK && status < http.StatusMultipleChoices && string(body) == "OK"
 }
 
 func callbackDeliveryErrorCode(err error) (string, bool) {

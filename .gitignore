@@ -20,6 +20,7 @@ var/
 !payment-service/.env.development.example
 !payment-service/.env.production.example
 !payment-service/.env.sandbox.example
+!payment-service/deploy/drill/.env.drill.example
 !payment-service/frontend/.env.example
 !merchant-sandbox/.env.example
 *local-env-keys*
@@ -72,7 +73,10 @@ compose.override.yaml
 .DS_Store
 Thumbs.db
 .idea/
-.vscode/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
 .obsidian/
 .codex/
 專案主檔/

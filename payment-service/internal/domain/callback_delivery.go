@@ -1,7 +1,9 @@
 package domain
 
 import (
+	"bytes"
 	"context"
+	"net/http"
 	"strings"
 	"time"
 	"unicode"
@@ -26,6 +28,11 @@ type DeliveryResult struct {
 
 type CallbackDeliveryEngine interface {
 	Deliver(context.Context, CallbackDeliveryRequest) DeliveryResult
+}
+
+// IsSuccessfulMerchantCallbackResponse is the frozen external callback contract.
+func IsSuccessfulMerchantCallbackResponse(status int, body []byte) bool {
+	return status >= http.StatusOK && status < http.StatusMultipleChoices && bytes.Equal(body, []byte("OK"))
 }
 
 type MerchantDepositCallbackAttempt struct {

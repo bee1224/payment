@@ -151,7 +151,7 @@ func (e *localCallbackEngine) Deliver(ctx context.Context, request domain.Callba
 	} else if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		result.Error = errors.New("callback returned non-2xx status")
 		result.ErrorCode = "http_4xx"
-	} else if strings.TrimSpace(string(response)) != "OK" {
+	} else if !domain.IsSuccessfulMerchantCallbackResponse(resp.StatusCode, response) {
 		result.Error = errors.New("callback response was not OK")
 		result.ErrorCode = "response_not_ok"
 		result.Retryable = true

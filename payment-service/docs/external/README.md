@@ -1,24 +1,44 @@
-# nnviopp Gateway 串接指南
+# 外部系統商 Sandbox 串接入口
 
-本資料夾提供商戶與外部系統商使用的正式串接文件；不包含平台技術實作、維運內容或敏感設定。
+本目錄是外部系統商唯一需要閱讀的 payment-service 文件入口。只使用公開 HTTPS API 與本目錄的契約；不需要 payment-service 原始碼、資料庫、內部工具或平台部署權限。
 
-## 文件閱讀順序
+## Recommended reading order
 
-1. [商戶代收介面串接文件](商戶代收介面串接文件.md)
-2. [商戶代付介面串接文件](商戶代付介面串接文件.md)
-3. [雜湊訊息驗證碼簽章規格](雜湊訊息驗證碼簽章規格.md)
-4. [回調通知規格](回調通知規格.md)
-5. [Sandbox 串接與驗收指南](Sandbox串接與驗收指南.md)
-6. [錯誤碼與重試處理](錯誤碼與重試處理.md)
-7. [銀行代碼對照表](銀行代碼對照表.md)
+1. [Sandbox Onboarding](sandbox-onboarding.md)：可複製的代收 Happy Path。
+2. [Sandbox Credential Guide](merchant-credential-guide.md)：每一組識別與 Secret 的用途及保管方式。
+3. [商戶代收介面串接文件](商戶代收介面串接文件.md)：建單、查單與 status 對照。
+4. [雜湊訊息驗證碼簽章規格](雜湊訊息驗證碼簽章規格.md)：商戶 Request HMAC 與 Golden Example。
+5. [回調通知規格](回調通知規格.md)：平台 Callback HMAC、replay protection、`OK` 契約與成功後的觀察規則。
+6. [錯誤碼與重試處理](錯誤碼與重試處理.md) 與 [Troubleshooting](troubleshooting.md)。
 
-## 測試環境（Sandbox）
+一般代付另見 [商戶代付介面串接文件](商戶代付介面串接文件.md)；它不是本代收 Happy Path 的前置條件。
 
-目前串接請使用測試環境（Sandbox）。Production 僅於正式驗收後提供。請向平台窗口取得該環境的 API Base URL、Merchant／Customer ID 與 Secret；不得將 Sandbox 與 Production 的 URL、ID、Secret、訂單或回調網址混用。
+## Quick-start checklist
 
-## 注意事項
+- 已由平台以受控管道提供 Sandbox API Base URL 與 Sandbox-only Credential。
+- Callback URL 是可由 Internet 存取的公開 HTTPS URL；不可用 localhost、私有 IP、VPN-only URL 或 Production URL。
+- 建單與查單都以 Customer ID／Customer Request Signing Secret 簽章；每次 request 使用新 timestamp 與 nonce。
+- Callback 使用專屬 Callback Key ID／Callback Signing Secret 驗簽；成功必須回 HTTP 2xx 且 body bytes **精確為** `OK`。reference merchant 可用其受控主機上的 `callback-status` CLI 查閱非敏感 acceptance metadata。
+- 建單後保存 `order_id`、`transaction_id`、`view_url`、`expired`；在 `expired` 前開啟付款頁，過期即建立全新訂單。
 
-- 所有請求必須完成 HMAC 簽章、Timestamp 與 Nonce 驗證。代收的 `pay_apply_date` 也是 Unix timestamp（秒），不是日期字串。
-- 每次重送請求必須使用新的 Nonce；相同業務訂單請使用既有訂單編號以取得冪等結果。
-- 回調（Callback）接收端必須使用公開 HTTPS 網址，並依文件驗證簽章。
-- 代收與一般代付回調成功條件為 HTTP 2xx 且回應本文為 `OK`；Manual Payout 的外部契約尚未驗證，請勿自行假設其成功條件。
+## Sandbox boundary
+
+Sandbox endpoint 由平台提供；目前 reference merchant 使用 `https://sandbox-api.nnviopp.com`。不得把 Sandbox／Production URL、ID、Secret、訂單或 callback destination 混用。Production 不在本文件或本階段驗收範圍。
+
+## Credential terms
+
+| 類別 | 用途 | 不得混用為 |
+| --- | --- | --- |
+| Customer ID + Customer Request Signing Secret | 代收 API Request HMAC | Merchant／Callback credential |
+| Merchant ID + Merchant Request Signing Secret + API Key | 一般代付 API | 代收或 Callback credential |
+| Callback Key ID + Callback Signing Secret | 驗證平台送至商戶的 Callback | API request signing secret 或 API Key |
+
+完整規則見 [Sandbox Credential Guide](merchant-credential-guide.md)。
+
+## Happy Path 完成條件
+
+外部商戶可獨立完成：代收建單、pending 查單、Sandbox 付款、Callback HMAC 驗證、精確 `OK` 回應、等待規定觀察時間確認未重送，以及再次查單確認 paid。平台端的 Provider Notify、ledger、task 與 attempt 是平台內部驗收證據，非商戶正常串接步驟。
+
+## 向平台回報問題
+
+提供 Sandbox 環境、時間（含時區）、merchant order ID、platform transaction ID、HTTP status、API `code`、Callback path、Callback timestamp、body SHA-256、HMAC 驗證結果及 response status／body 摘要。不得提供任何 Secret、API Key、完整 signature、完整 nonce、完整 payload、付款人資料或 Production 資料。

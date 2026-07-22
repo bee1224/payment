@@ -60,15 +60,33 @@ func TestBestEffortNotifyFieldExtraction(t *testing.T) {
 }
 
 func TestPostGatewayDepositCallbackRequires2xxAndOK(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte("OK"))
-	}))
-	defer server.Close()
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		wantOK bool
+	}{
+		{name: "exact OK", status: http.StatusOK, body: "OK", wantOK: true},
+		{name: "newline", status: http.StatusOK, body: "OK\\n"},
+		{name: "leading space", status: http.StatusOK, body: " OK"},
+		{name: "trailing space", status: http.StatusOK, body: "OK "},
+		{name: "lowercase", status: http.StatusOK, body: "ok"},
+		{name: "empty", status: http.StatusOK, body: ""},
+		{name: "JSON", status: http.StatusOK, body: `{"status":"OK"}`},
+		{name: "non 2xx", status: http.StatusInternalServerError, body: "OK"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
 
-	handler := &DepositHandler{}
-	if err := handler.postGatewayDepositCallback(server.URL, []byte(`{}`)); err == nil {
-		t.Fatal("expected non-2xx callback response to fail")
+			err := (&DepositHandler{}).postGatewayDepositCallback(server.URL, []byte(`{}`))
+			if (err == nil) != tc.wantOK {
+				t.Fatalf("postGatewayDepositCallback() error = %v, want success=%t", err, tc.wantOK)
+			}
+		})
 	}
 }
 

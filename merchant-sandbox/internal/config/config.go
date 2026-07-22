@@ -42,7 +42,7 @@ func Load() (Config, error) {
 		APIKey:                os.Getenv("PAYMENT_API_KEY"),
 		CallbackKeyID:         os.Getenv("MERCHANT_SANDBOX_CALLBACK_KEY_ID"),
 		CallbackSigningSecret: os.Getenv("MERCHANT_SANDBOX_CALLBACK_SIGNING_SECRET"),
-		ListenAddr:            value("MERCHANT_SANDBOX_LISTEN_ADDR", ":8081"),
+		ListenAddr:            value("MERCHANT_SANDBOX_LISTEN_ADDR", ":8281"),
 		CallbackPath:          value("MERCHANT_SANDBOX_CALLBACK_PATH", "/callbacks/payment"),
 		CallbackResponseMode:  value("MERCHANT_SANDBOX_CALLBACK_RESPONSE_MODE", "success"),
 		TimeoutDelay:          delay,

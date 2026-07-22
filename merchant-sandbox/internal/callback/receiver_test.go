@@ -106,7 +106,7 @@ func TestReceiverWritesNonSensitiveAcceptanceRecord(t *testing.T) {
 	path := t.TempDir() + "/callback-records.jsonl"
 	r := New(Config{Path: "/callbacks/payment", MerchantID: "merchant", CallbackKeyID: "v1", CallbackSigningSecret: "secret", ResponseMode: "success", RecordsPath: path})
 	w := httptest.NewRecorder()
-	r.Handler().ServeHTTP(w, signedRequestAt(t, "/callbacks/payment", []byte(`{"transaction_id":"tx-1","status":"paid"}`), strconv.FormatInt(time.Now().Unix(), 10), "record-nonce", "secret"))
+	r.Handler().ServeHTTP(w, signedRequestAt(t, "/callbacks/payment", []byte(`{"order_id":"merchant-order-1","transaction_id":"tx-1","status":"paid"}`), strconv.FormatInt(time.Now().Unix(), 10), "record-nonce", "secret"))
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Code)
 	}
@@ -115,6 +115,9 @@ func TestReceiverWritesNonSensitiveAcceptanceRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Contains(contents, []byte(`"hmac_valid":true`)) ||
+		!bytes.Contains(contents, []byte(`"merchant_order_id":"merchant-order-1"`)) ||
+		!bytes.Contains(contents, []byte(`"timestamp_valid":true`)) ||
+		!bytes.Contains(contents, []byte(`"response_body_is_exact_ok":true`)) ||
 		!bytes.Contains(contents, []byte(`"callback_timestamp":`)) ||
 		!bytes.Contains(contents, []byte(`"nonce_fingerprint":`)) ||
 		!bytes.Contains(contents, []byte(`"signature_fingerprint":`)) ||
@@ -122,5 +125,25 @@ func TestReceiverWritesNonSensitiveAcceptanceRecord(t *testing.T) {
 		bytes.Contains(contents, []byte("record-nonce")) ||
 		bytes.Contains(contents, []byte("transaction_id")) {
 		t.Fatalf("unexpected record %s", contents)
+	}
+}
+
+func TestLoadAcceptanceStatusSummarizesMatchingRecords(t *testing.T) {
+	path := t.TempDir() + "/callback-records.jsonl"
+	r := New(Config{Path: "/callbacks/payment", MerchantID: "merchant", CallbackKeyID: "v1", CallbackSigningSecret: "secret", ResponseMode: "success", RecordsPath: path})
+	body := []byte(`{"order_id":"merchant-order-1","transaction_id":"tx-1","status":"paid"}`)
+	for _, nonce := range []string{"record-nonce-1", "record-nonce-2"} {
+		w := httptest.NewRecorder()
+		r.Handler().ServeHTTP(w, signedRequestAt(t, "/callbacks/payment", body, strconv.FormatInt(time.Now().Unix(), 10), nonce, "secret"))
+		if w.Code != http.StatusOK || w.Body.String() != "OK" {
+			t.Fatalf("status/body=%d/%q", w.Code, w.Body.String())
+		}
+	}
+	status, err := LoadAcceptanceStatus(path, "merchant-order-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Received || status.ReceivedCount != 2 || status.HMACValid == nil || !*status.HMACValid || status.TimestampValid == nil || !*status.TimestampValid || status.NonceReplayDetected == nil || *status.NonceReplayDetected || status.SignatureVersion == nil || *status.SignatureVersion != signatureVersion || status.ResponseStatus == nil || *status.ResponseStatus != http.StatusOK || status.ResponseBodyExactOK == nil || !*status.ResponseBodyExactOK || status.FirstReceivedAt == nil || status.LastReceivedAt == nil {
+		t.Fatalf("unexpected status: %+v", status)
 	}
 }

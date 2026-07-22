@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"testing"
+
+	"payment-service/internal/domain"
 )
 
 func TestSuccessfulMerchantCallbackResponseRequiresExactOK(t *testing.T) {
@@ -17,13 +19,16 @@ func TestSuccessfulMerchantCallbackResponseRequiresExactOK(t *testing.T) {
 	}{
 		{name: "exact OK", status: http.StatusOK, body: "OK", want: true},
 		{name: "body with newline", status: http.StatusOK, body: "OK\\n", want: false},
-		{name: "body with spaces", status: http.StatusOK, body: " OK ", want: false},
+		{name: "leading space", status: http.StatusOK, body: " OK", want: false},
+		{name: "trailing space", status: http.StatusOK, body: "OK ", want: false},
 		{name: "lowercase", status: http.StatusOK, body: "ok", want: false},
+		{name: "empty body", status: http.StatusOK, body: "", want: false},
+		{name: "JSON body", status: http.StatusOK, body: `{"status":"OK"}`, want: false},
 		{name: "non 2xx", status: http.StatusInternalServerError, body: "OK", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isSuccessfulMerchantCallbackResponse(tc.status, []byte(tc.body)); got != tc.want {
-				t.Fatalf("isSuccessfulMerchantCallbackResponse(%d, %q) = %t, want %t", tc.status, tc.body, got, tc.want)
+			if got := domain.IsSuccessfulMerchantCallbackResponse(tc.status, []byte(tc.body)); got != tc.want {
+				t.Fatalf("IsSuccessfulMerchantCallbackResponse(%d, %q) = %t, want %t", tc.status, tc.body, got, tc.want)
 			}
 		})
 	}
